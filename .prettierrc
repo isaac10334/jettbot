@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/prettierrc",
+  "singleQuote": true,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": false,
+  "printWidth": 100,
+  "trailingComma": "es5",
+  "arrowParens": "avoid",
+  "bracketSpacing": true,
+  "proseWrap": "preserve",
+
+  "plugins": ["@ianvs/prettier-plugin-sort-imports"],
+  "importOrder": ["^react", "<THIRD_PARTY_MODULES>", "^[./]"],
+  "importOrderSeparation": true,
+  "importOrderSortSpecifiers": true,
+  "importOrderParserPlugins": ["typescript", "jsx"],
+
+  "embeddedLanguageFormatting": "off",
+  "overrides": [
+    { "files": "*.md", "options": { "proseWrap": "preserve" } },
+    { "files": "*.json", "options": { "trailingComma": "none" } }
+  ],
+  "endOfLine": "lf",
+  "htmlWhitespaceSensitivity": "ignore"
+}
