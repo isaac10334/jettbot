@@ -1,15 +1,6 @@
-# jettbot-again-fucking-jesus-christ
+# jettbot
 
-To install dependencies:
+TODO:
 
-```bash
-bun install
-```
-
-To run:
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.3.0. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+- [ ] Figure out details about the DiscordJS & OpenAI Realtime API, and how to fit them together elegantly, e.g. abstracting away ridiculous audio conversion problems.
+- [ ]
