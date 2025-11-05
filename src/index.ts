@@ -2,23 +2,24 @@
 // One-path audio: Realtime PCM16/24k/mono → FFmpeg 48k/stereo → Opus → Discord (StreamType.Opus)
 
 /* -------------------------------- Boot & Deps ------------------------------- */
-
+import {
+  awaitWithTimeout,
+  createPcm24MonoToOpus48Stereo,
+  makeDiscordVoiceRuntime,
+  opus48StereoToPcm24Mono,
+  sanityCheckFfmpeg,
+  TO,
+  type VoiceRuntime,
+} from './audio/io'
 import 'dotenv/config'
 import '@discordjs/opus'
-import { spawn, type ChildProcess } from 'node:child_process'
-import { once } from 'node:events'
-import { constants as fsConst } from 'node:fs'
-import { access } from 'node:fs/promises'
-import { platform } from 'node:os'
-import { PassThrough, Readable, Transform } from 'node:stream'
+import { Readable } from 'node:stream'
 import {
-  AudioPlayerStatus,
   createAudioPlayer,
-  createAudioResource,
+  EndBehaviorType,
   entersState,
   joinVoiceChannel,
   NoSubscriberBehavior,
-  StreamType,
   VoiceConnectionStatus,
   type AudioPlayer,
   type VoiceConnection,
@@ -32,359 +33,26 @@ import {
   type GuildMember,
   type Message,
 } from 'discord.js'
+import { reportUtteranceTool } from './core/tools'
+import type { TranscriptPacket } from './core/types'
 
 /* --------------------------- Configuration & Flags -------------------------- */
-
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN ?? ''
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
 const GUILD_ID = process.env.GUILD_ID ?? ''
 const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID ?? ''
 const DEFAULT_MODEL = process.env.MODEL ?? 'gpt-realtime'
 const DEBUG_AUDIO = !!(process.env.DEBUG && process.env.DEBUG !== '0')
+const VOICE = process.env.VOICE ?? 'onyx'
+
+// Temp debugging - one user voice only (me)
+const TARGET_USER_ID = '377268939035639810'
+// How long of silence to let the receiver consider "end of utterance"
+const RX_SILENCE_MS = 600
 
 if (!DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN in .env')
   process.exit(1)
-}
-
-/* ------------------------------- Timeouts ----------------------------------- */
-
-const TO = {
-  ffmpegVersion: 5_000,
-  ffmpegPrismSpawnFast: 1_500,
-  bridgeReady: 5_000,
-  discordConnReady: 10_000,
-  playerStart: 10_000,
-  rtConnect: 8_000,
-  beep: 6_000,
-  opusWarmup: 800,
-}
-
-async function awaitWithTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let t: NodeJS.Timeout | null = null
-  return await Promise.race<T>([
-    p.finally(() => {
-      if (t) clearTimeout(t)
-    }),
-    new Promise<never>((_, rej) => {
-      t = setTimeout(() => rej(new Error(`[timeout] ${label} exceeded ${ms}ms`)), ms)
-    }),
-  ])
-}
-
-/* ------------------------------ FFmpeg Helpers ------------------------------ */
-
-async function resolveFfmpegPath(): Promise<string | null> {
-  const envPath = process.env.FFMPEG_PATH?.trim()
-  if (envPath) {
-    try {
-      await access(envPath, fsConst.X_OK)
-      return envPath
-    } catch {
-      return envPath
-    }
-  }
-  const candidates =
-    platform() === 'win32'
-      ? ['ffmpeg.exe', 'C:\\ffmpeg\\bin\\ffmpeg.exe']
-      : ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']
-  for (const c of candidates) {
-    try {
-      await access(c, fsConst.X_OK)
-      return c
-    } catch {}
-  }
-  return null
-}
-
-async function sanityCheckFfmpeg(): Promise<string> {
-  const bin = (await resolveFfmpegPath()) ?? 'ffmpeg'
-  return awaitWithTimeout<string>(
-    new Promise<string>((resolve, reject) => {
-      const p = spawn(bin, ['-version'])
-      let out = ''
-      let err = ''
-      p.stdout.on('data', d => (out += String(d)))
-      p.stderr.on('data', d => (err += String(d)))
-      p.once('error', reject)
-      p.once('exit', code => {
-        if (code === 0 && out) resolve(out.split('\n')[0]?.trim() || 'ffmpeg OK')
-        else reject(new Error(`ffmpeg -version failed (code ${code}): ${err || out}`))
-      })
-    }),
-    TO.ffmpegVersion,
-    'ffmpeg -version'
-  )
-}
-
-/* ------------------------------ Audio Bridge -------------------------------- */
-
-type Pcm24ToOpus = {
-  write: (buf: Buffer) => void // feed PCM16LE @ 24k mono
-  end: () => void
-  opus: NodeJS.ReadableStream // Opus @ 48k stereo
-  ready: Promise<void> // bridge is plumbed
-  firstPacket: Promise<void> // resolves when first Opus frame is AVAILABLE (readable)
-  close: () => void
-}
-
-const FF_ARGS_COMMON = ['-nostdin', '-hide_banner', '-loglevel', 'warning']
-function ffArgs24monoTo48stereoPcm(): string[] {
-  return [
-    ...FF_ARGS_COMMON,
-    '-f',
-    's16le',
-    '-ar',
-    '24000',
-    '-ac',
-    '1',
-    '-i',
-    'pipe:0',
-    '-fflags',
-    '+bitexact',
-    '-f',
-    's16le',
-    '-ar',
-    '48000',
-    '-ac',
-    '2',
-    'pipe:1',
-  ]
-}
-
-async function rawSpawnFfmpeg(
-  ffArgs: string[],
-  input: PassThrough
-): Promise<NodeJS.ReadableStream> {
-  const bin = (await resolveFfmpegPath()) ?? 'ffmpeg'
-  if (DEBUG_AUDIO) console.warn('[ffmpeg] raw spawn ->', bin)
-  const cp = spawn(bin, ffArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
-
-  try {
-    input.pipe(cp.stdin!)
-  } catch {}
-
-  const out = new PassThrough({ highWaterMark: 1 << 16 })
-  cp.stdout!.pipe(out)
-  cp.stderr?.on('data', d => {
-    if (DEBUG_AUDIO) process.stderr.write(String(d))
-  })
-  const fin = () => out.end()
-  cp.once('close', fin).once('exit', fin)
-  cp.once('error', err => {
-    try {
-      out.destroy(err as any)
-    } catch {}
-  })
-  return out as unknown as NodeJS.ReadableStream
-}
-
-function createPcm24MonoToOpus48Stereo(): Pcm24ToOpus {
-  const pcm24In = new PassThrough({ highWaterMark: 1 << 16 })
-  pcm24In.setMaxListeners(0)
-
-  let ended = false
-  let closed = false
-  let _opus: NodeJS.ReadableStream | null = null
-
-  let resolveReady!: () => void
-  let rejectReady!: (e: unknown) => void
-  const ready = new Promise<void>((res, rej) => {
-    resolveReady = res
-    rejectReady = rej
-  })
-
-  let resolveFirst!: () => void
-  const firstPacket = new Promise<void>(res => (resolveFirst = res))
-
-  const ffArgs = ffArgs24monoTo48stereoPcm()
-
-  void (async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const prismAny = (await import('prism-media')) as any
-    const Prism = prismAny?.default ?? prismAny
-    const OpusEncoder = Prism?.opus?.Encoder
-    const FFmpegCtor = Prism?.FFmpeg
-    if (!OpusEncoder) throw new Error('prism-media: opus Encoder missing')
-
-    const wireEnc = (src: NodeJS.ReadableStream) => {
-      const enc = new OpusEncoder({ rate: 48_000, channels: 2, frameSize: 960 })
-      enc.on('error', (e: unknown) => console.warn('[opus:enc:error]', (e as Error)?.message ?? e))
-      _opus = src.pipe(enc)
-      // Non-consuming readiness
-      _opus!.once('readable', () => {
-        try {
-          resolveFirst()
-        } catch {}
-      })
-      ;(cleanup as any).ff = src
-      ;(cleanup as any).enc = enc
-    }
-
-    if (FFmpegCtor) {
-      try {
-        const prismFF = new FFmpegCtor({ args: ffArgs })
-        let spawned = false
-        const fall = setTimeout(async () => {
-          if (!spawned) {
-            try {
-              ;(prismFF as any)?.destroy?.()
-            } catch {}
-            const rawOut = await rawSpawnFfmpeg(ffArgs, pcm24In)
-            resolveReady()
-            wireEnc(rawOut)
-          }
-        }, TO.ffmpegPrismSpawnFast)
-
-        prismFF.once('spawn', (cp: ChildProcess) => {
-          spawned = true
-          clearTimeout(fall)
-          if (cp?.stdin) pcm24In.pipe(cp.stdin)
-          resolveReady()
-        })
-        prismFF.once('error', async (e: unknown) => {
-          if (closed) return
-          console.warn('[ffmpeg:prism:error]', (e as Error)?.message ?? e)
-          try {
-            ;(prismFF as any)?.destroy?.()
-          } catch {}
-          const rawOut = await rawSpawnFfmpeg(ffArgs, pcm24In)
-          resolveReady()
-          wireEnc(rawOut)
-        })
-
-        wireEnc(prismFF as unknown as NodeJS.ReadableStream)
-        return
-      } catch (e) {
-        if (DEBUG_AUDIO) console.warn('[ffmpeg] prism ctor failed; raw spawn fallback:', e)
-      }
-    }
-
-    const rawOut = await rawSpawnFfmpeg(ffArgs, pcm24In)
-    resolveReady()
-    wireEnc(rawOut)
-  })().catch(err => {
-    try {
-      rejectReady(err)
-    } catch {}
-  })
-
-  function write(buf: Buffer) {
-    if (ended || closed) return
-    if (buf.length & 1) buf = buf.subarray(0, buf.length - 1) // keep s16 alignment
-    const ok = pcm24In.write(buf)
-    if (!ok) pcm24In.once('drain', () => {})
-  }
-  function end() {
-    if (!ended && !closed) {
-      ended = true
-      try {
-        pcm24In.end()
-      } catch {}
-    }
-  }
-  function cleanup() {
-    try {
-      pcm24In.destroy()
-    } catch {}
-    try {
-      ;(cleanup as any).ff?.destroy?.()
-    } catch {}
-    try {
-      ;(cleanup as any).enc?.destroy?.()
-    } catch {}
-  }
-  function close() {
-    if (!closed) {
-      closed = true
-      cleanup()
-    }
-  }
-
-  return {
-    write,
-    end,
-    get opus(): NodeJS.ReadableStream {
-      if (!_opus) throw new Error('bridge not ready yet')
-      return _opus as NodeJS.ReadableStream
-    },
-    ready,
-    firstPacket,
-    close,
-  }
-}
-
-/* --------------------------- Discord Voice Runtime ------------------------- */
-
-type Playback = { done: Promise<void> }
-type VoiceRuntime = {
-  playOpus: (opus: NodeJS.ReadableStream) => Playback
-}
-
-class PcmVolume extends Transform {
-  private vol = 1
-  constructor(v = 1) {
-    super()
-    this.vol = Math.max(0, v)
-  }
-  setVolume(v: number) {
-    this.vol = Math.max(0, v)
-  }
-  override _transform(
-    chunk: Buffer,
-    _enc: BufferEncoding,
-    cb: (e?: Error | null, d?: Buffer) => void
-  ) {
-    if (this.vol === 1) return cb(null, chunk)
-    const out = Buffer.from(chunk)
-    for (let i = 0; i < out.length; i += 2) {
-      const s = out.readInt16LE(i)
-      let v = (s * this.vol) | 0
-      if (v > 0x7fff) v = 0x7fff
-      else if (v < -0x8000) v = -0x8000
-      out.writeInt16LE(v, i)
-    }
-    cb(null, out)
-  }
-}
-
-function makeDiscordVoiceRuntime(conn: VoiceConnection, player: AudioPlayer): VoiceRuntime {
-  try {
-    conn.on('stateChange', (o, n) => {
-      if (DEBUG_AUDIO) console.log('[conn]', o.status, '->', n.status)
-    })
-    player.on('stateChange', (o, n) => {
-      if (DEBUG_AUDIO) console.log('[player]', o.status, '->', n.status)
-    })
-    player.on('error', e => console.warn('[player:error]', e.message))
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    awaitWithTimeout(
-      entersState(conn, VoiceConnectionStatus.Ready, TO.discordConnReady),
-      TO.discordConnReady + 1000,
-      'discord connection ready'
-    )
-    conn.subscribe(player)
-  } catch (e) {
-    console.warn('[voice:init]', e)
-  }
-
-  function playOpus(opus: NodeJS.ReadableStream): Playback {
-    const res = createAudioResource(opus as Readable, { inputType: StreamType.Opus })
-    player.play(res)
-    const done = (async () => {
-      try {
-        await awaitWithTimeout(
-          entersState(player, AudioPlayerStatus.Playing, TO.playerStart),
-          TO.playerStart + 500,
-          'player playing (opus)'
-        )
-        await once(player, 'idle')
-      } catch {}
-    })()
-    return { done }
-  }
-
-  return { playOpus }
 }
 
 /* -------------------------------- Beep Utils -------------------------------- */
@@ -439,7 +107,18 @@ function safeClose(b: { end: () => void; close: () => void } | null | undefined)
     b.close()
   } catch {}
 }
+export function toArrayBuffer(buf: Buffer): ArrayBuffer {
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+}
+// PCM16 mono @ 24k => 48 bytes per ms
+function bytesToMs24kMono(bytes: number): number {
+  return (bytes / 2 /*bytes/sample*/ / 24000) /*samples/s*/ * 1000
+}
 
+function pcm24SilenceMs(ms: number): Buffer {
+  const bytes = Math.max(0, Math.ceil(ms) * 48)
+  return Buffer.alloc(bytes, 0)
+}
 /* ------------------------ Sanity (FFmpeg + Bridge check) -------------------- */
 
 async function sanityCheckAudio(): Promise<void> {
@@ -476,6 +155,156 @@ async function beepTest(voice: VoiceRuntime, timeoutMs = TO.beep): Promise<boole
 
 /* --------------------- OpenAI Realtime → Discord playback ------------------- */
 
+/* --------------------------------- Users Speaking Wiring -------------------------------- */
+function wireInputStreamingForGuild(guildId: string) {
+  const vc = voices.get(guildId)
+  if (!vc) return
+  const { conn } = vc
+  const rcv = conn.receiver
+
+  rcv.speaking.on('start', async (userId: string) => {
+    try {
+      const key = `${guildId}:${userId}`
+      const guild = await client.guilds.fetch(guildId)
+      const channelId = (conn as any).joinConfig?.channelId as string | undefined
+      const channel = channelId ? await guild.channels.fetch(channelId) : null
+      const member = await guild.members.fetch(userId).catch(() => null)
+
+      const speakerTag = member?.user?.id ?? userId // stable id
+      const guildName = guild.name
+      const channelName = channel?.isVoiceBased() ? channel.name : '(unknown channel)'
+
+      // Ensure PSS
+      if (!speakers.has(key)) {
+        if (!OPENAI_API_KEY) return
+        const session = await createSpeakerSession({
+          apiKey: OPENAI_API_KEY,
+          model: DEFAULT_MODEL,
+          guildName,
+          channelName,
+          speakerTag,
+        })
+        speakers.set(key, { session, userTag: speakerTag })
+      }
+
+      // Subscribe to the user's inbound Opus stream
+      const opus = rcv.subscribe(userId, {
+        end: { behavior: EndBehaviorType.AfterSilence, duration: RX_SILENCE_MS },
+      })
+
+      // Decode → PCM24k mono (your helper)
+      const pcm24 = await opus48StereoToPcm24Mono(opus)
+
+      // Feed to session using sendAudio/commit
+      const { session } = speakers.get(key)!
+      let accBytes = 0
+      let lastChunk: Buffer | null = null
+
+      pcm24.on('data', (chunk: Buffer) => {
+        accBytes += chunk.length
+
+        if (accBytes < 2) return
+
+        if (lastChunk && lastChunk.length & 1)
+          lastChunk = lastChunk.subarray(0, lastChunk.length - 1)
+
+        // If we already have a previous chunk, send it now (no commit)
+        if (lastChunk) {
+          session.sendAudio(toArrayBuffer(lastChunk))
+        }
+        lastChunk = chunk // keep one-chunk lookahead
+      })
+
+      pcm24.once('end', () => {
+        // Nothing captured? bail quietly.
+        if (accBytes === 0 || !lastChunk) return
+
+        // Ensure the *committing* call contains audio.
+        const accMs = bytesToMs24kMono(accBytes)
+
+        if (accMs < 100) {
+          // Pad to 100ms and commit in one go
+          const pad = pcm24SilenceMs(100 - accMs)
+          // Concatenate lastChunk + pad so commit call has bytes
+          const commitBuf = Buffer.concat([lastChunk, pad])
+          session.sendAudio(toArrayBuffer(commitBuf), { commit: true })
+        } else {
+          // Commit on the final real audio chunk (no zero-length commits)
+          session.sendAudio(toArrayBuffer(lastChunk), { commit: true })
+        }
+
+        lastChunk = null
+      })
+    } catch (e) {
+      console.warn('[rx]', e)
+    }
+  })
+}
+
+function makeJettbotSession(guildName: string, channelName: string) {
+  const baseInstructions = [
+    `You're Jettbot inside Discord server "${guildName}", voice channel "${channelName}".`,
+    `Transcribe and respond briefly in voice. Keep replies under 5 seconds.`,
+    `If multiple people talk, respond to the current speaker only. Roleplay as an angry, yet not hateful AI. Say hilariously funny jabs and angry rants, but keep them short!`,
+  ].join(' ')
+
+  const agent = new RealtimeAgent({
+    name: 'Jettbot',
+    instructions: baseInstructions,
+  })
+
+  return new RealtimeSession(agent, {
+    transport: 'websocket',
+    model: 'gpt-realtime',
+    config: {
+      audio: {
+        input: {
+          turnDetection: {
+            type: 'server_vad',
+            silenceDurationMs: RX_SILENCE_MS, // 600 is fine for now
+            threshold: 0.5,
+            createResponse: true, // <-- AUTOMATICALLY create response on VAD end
+            interruptResponse: true,
+          },
+        },
+        output: { format: 'pcm16', voice: VOICE },
+      },
+    },
+  })
+}
+
+async function createInputSessionForSpeaker(opts: {
+  apiKey: string
+  guildName: string
+  channelName: string
+  speakerTag: string
+  debug?: boolean
+}) {
+  const { apiKey, guildName, channelName, speakerTag, debug } = opts
+
+  const session = makeJettbotSession(guildName, channelName)
+
+  await awaitWithTimeout(session.connect({ apiKey, model }), TO.rtConnect, 'realtime rx connect')
+  if (debug) console.log('[rt:rx] connected')
+
+  // Only send supported fields
+  session.transport.updateSessionConfig?.({
+    instructions: `${baseInstructions} Current speaker is "${speakerTag}".`,
+  })
+
+  // Optional breadcrumb (no metadata field)
+  session.transport.sendEvent?.({
+    type: 'conversation.item.create',
+    item: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: `(system) ${speakerTag} started speaking` }],
+    },
+  } as any)
+
+  return session
+}
+
 async function playAgentMessage(
   voice: VoiceRuntime,
   opts: {
@@ -497,10 +326,41 @@ async function playAgentMessage(
   const session = new RealtimeSession(new RealtimeAgent({ name: 'Jettbot', instructions }), {
     transport: 'websocket',
     model,
-    config: { audio: { output: { format: 'pcm16', voice: 'alloy' } } }, // PCM16 mono @ 24k
+    config: { audio: { output: { format: 'pcm16', voice: VOICE } } }, // PCM16 mono @ 24k
   })
   await awaitWithTimeout(session.connect({ apiKey, model }), TO.rtConnect, 'realtime connect')
   if (debug) console.log('[rt] connected')
+
+  /* EXPERIMENT 10/19 2PM */
+  // session.transport.updateSessionConfig({
+  //   // audio
+  //   // instructions
+  //   // model
+  //   // outputModalities
+  //   // prompt
+  //   // providerData
+  //   // toolChoice
+  //   // tools
+  //   // tracing
+  //   // voice
+  // })
+  // session.sendMessage(
+  //   {
+  //     content: 'blah',
+  //     role: 'test',
+  //   },
+  //   {
+  //     asdf: 'hi',
+  //   }
+  // )
+  // session.on('history_added', item => {
+  //   // item.itemId
+  //   // item.type
+  //   // I think you get to set the type of this?
+  // })
+  // // session.on('history_updated')
+  // session.sendAudio()
+  /* END EXP */
 
   let started = false
   let bridge: ReturnType<typeof createPcm24MonoToOpus48Stereo> | null = null
@@ -525,13 +385,11 @@ async function playAgentMessage(
       await awaitWithTimeout(bridge.ready, TO.bridgeReady, 'realtime: bridge.ready (opus)')
 
       // Start playback BEFORE any feeding
-      const pb = voice.playOpus(bridge.opus)
+      const pb = voice.playOpus(bridge.opus) // start playback first
       pb.done.catch(() => {}).then(endAll)
 
-      // Optional: warn if no Opus quickly (but no PCM fallback anymore)
-      awaitWithTimeout(bridge.firstPacket, TO.opusWarmup, 'realtime: opus first packet').catch(
-        () => debug && console.warn('[rt] no opus seen yet — check ffmpeg/encoder')
-      )
+      // Debug opus stuff
+      // awaitWithTimeout(bridge.firstPacket, TO.opusWarmup, 'realtime: opus first packet')
     }
 
     bridge!.write(buf)
@@ -551,6 +409,38 @@ async function playAgentMessage(
 
 type VoiceCtx = { conn: VoiceConnection; player: AudioPlayer; runtime: VoiceRuntime }
 const voices = new Map<string, VoiceCtx>()
+
+// Speaking map and whatnot
+// top of file (near voices map)
+type SpeakerCtx = {
+  session: RealtimeSession
+  userTag: string
+}
+const speakers = new Map<string, SpeakerCtx>() // key: `${guildId}:${userId}`
+
+// Minimal bus -> just call handlePacket(pkt)
+async function handlePacket(pkt: TranscriptPacket) {
+  // Simple cross-talk policy: if 2+ finals within 1s and overlap, ask to pause or move channel
+  // (Replace with a real Conductor later)
+  const vc = voices.get(GUILD_ID)
+  if (!vc) return
+
+  // If mentionsBot or high toxicity, nudge priority
+  const priority = (pkt.mentionsBot ? 2 : 0) + (pkt.toxicity && pkt.toxicity > 0.7 ? 1 : 0)
+
+  // For now: immediately TTS a short acknowledgement when mentionsBot
+  if (pkt.mentionsBot && OPENAI_API_KEY) {
+    await playAgentMessage(vc.runtime, {
+      apiKey: OPENAI_API_KEY,
+      model: DEFAULT_MODEL,
+      text: `Okay ${pkt.userId} — ${pkt.intent ? `I got a ${pkt.intent}` : 'got it'}.`,
+      instructions:
+        "You are Jettbot. Audio only. Keep it under 3 seconds. Acknowledge briefly; don't repeat the user's words.",
+      debug: DEBUG_AUDIO,
+    })
+  }
+}
+// end speaking map and whatnot
 
 const client = new Client({
   intents: [
@@ -591,7 +481,9 @@ client.once(Events.ClientReady, async () => {
         const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } })
         const runtime = makeDiscordVoiceRuntime(conn, player)
         conn.subscribe(player)
+
         voices.set(guild.id, { conn, player, runtime })
+        wireInputStreamingForGuild(guild.id)
 
         if ('stageInstance' in channel && (channel as any).type?.toString().includes('Stage')) {
           try {
@@ -618,7 +510,6 @@ client.on(Events.MessageCreate, async (msg: Message) => {
   const content = msg.content.trim()
 
   const reply = (t: string) => msg.reply(t).catch(() => {})
-
   // await msg.delete()
 
   const ensureVoice = async (): Promise<VoiceCtx | null> => {
@@ -711,5 +602,137 @@ client.on(Events.MessageCreate, async (msg: Message) => {
     )
   }
 })
+async function createSpeakerSession(args: {
+  apiKey: string
+  model: string
+  guildName: string
+  channelName: string
+  speakerTag: string // can be the Discord user id
+}) {
+  const { apiKey, model, guildName, channelName, speakerTag } = args
+
+  const agent = new RealtimeAgent({
+    name: 'PSS',
+    instructions: [
+      `You transcribe ONLY speaker "${speakerTag}" in "${guildName}#${channelName}".`,
+      `Rules:`,
+      `- Stream partials; NEVER output audio.`,
+      `- When turn ends (VAD commit), call report_utterance with analytics {text, confidence, ...}.`,
+    ].join('\n'),
+    tools: [reportUtteranceTool],
+  })
+
+  const session = new RealtimeSession(agent, {
+    transport: 'websocket',
+    model,
+    // Disable output audio at the session level
+    config: {
+      audio: {
+        output: { format: 'none' },
+      },
+    },
+  })
+
+  await session.connect({ apiKey, model })
+
+  // === TOOL APPROVAL FLOW ===
+  session.on('tool_approval_requested', async (_ctx, _agent, approvalReq) => {
+    // Approve only our own tool(s); you can add allow-listing here
+    await session.approve(approvalReq.approvalItem, { alwaysApprove: true })
+  })
+
+  // === TOOL RESULTS (analytics JSON) ===
+  session.on('agent_tool_end', async (_ctx, _agent, tool, result, details) => {
+    if (tool.name !== 'report_utterance') return
+    // result is a string (per .d.ts) – assume tool returned JSON
+    let data: any = {}
+    try {
+      data = result ? JSON.parse(result) : {}
+    } catch {
+      /* tolerate */
+    }
+
+    const pkt: TranscriptPacket = {
+      type: 'utterance',
+      userId: speakerTag,
+      ts: Date.now(),
+      text: String(data.text ?? ''),
+      isFinal: true,
+      confidence: Number(data.confidence ?? 0.8),
+      lang: data.lang,
+      accent: data.accent,
+      emotion: data.emotion,
+      speakingRateWpm: numOrU(data.speakingRateWpm),
+      avgPitchHz: numOrU(data.avgPitchHz),
+      snrDb: numOrU(data.snrDb),
+      toxicity: numOrU(data.toxicity),
+      keywords: Array.isArray(data.keywords) ? data.keywords.slice(0, 5) : undefined,
+      mentionsBot: !!data.mentionsBot,
+      intent: data.intent,
+    }
+
+    // Hand to your Conductor (or a stub for now)
+    handlePacket(pkt).catch(() => {})
+  })
+
+  // Optional: watch history if you want debug visibility
+  // session.on("history_added", (item: RealtimeItem) => { ... });
+
+  // Errors
+  session.on('error', e => {
+    console.warn('[pss:error]', e.error ?? e)
+  })
+
+  return session
+
+  function numOrU(x: any) {
+    const n = Number(x)
+    return Number.isFinite(n) ? n : undefined
+  }
+}
 
 await client.login(DISCORD_TOKEN)
+
+function teardown(reason = 'shutdown') {
+  try {
+    // stop players & destroy connections
+    for (const [gid, vc] of voices) {
+      try {
+        vc.player.stop(true)
+      } catch {}
+      try {
+        vc.conn.destroy()
+      } catch {}
+      voices.delete(gid)
+    }
+    // discord client
+    try {
+      client.destroy()
+    } catch {}
+  } finally {
+    console.log(`[shutdown] ${reason}`)
+    // On Windows, sometimes signals are weird; force exit.
+    process.exit(0)
+  }
+}
+
+// Common signalss
+process.on('SIGINT', () => teardown('SIGINT'))
+process.on('SIGTERM', () => teardown('SIGTERM'))
+// Some shells send this on terminal close (not always on Windows)
+try {
+  process.on('SIGHUP', () => teardown('SIGHUP'))
+} catch {}
+
+process.on('uncaughtException', err => {
+  console.error('[uncaughtException]', err)
+  teardown('uncaughtException')
+})
+process.on('unhandledRejection', err => {
+  console.error('[unhandledRejection]', err)
+  teardown('unhandledRejection')
+})
+
+// If the parent (tsdown) kills the child w/o signals,
+// Node will still run 'beforeExit' when the event loop empties.
+process.on('beforeExit', () => teardown('beforeExit'))
