@@ -1,8 +1,10 @@
 onlyBuiltDependencies:
   - '@discordjs/opus'
   - '@parcel/watcher'
+  - esbuild
   - ffmpeg-static
   - msgpackr-extract
   - node-opus
   - ref
   - sodium
+  - wrtc
