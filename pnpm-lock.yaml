@@ -47,9 +47,6 @@ importers:
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
-      effect:
-        specifier: ^3.18.4
-        version: 3.18.4
       ffmpeg-static:
         specifier: ^5.2.0
         version: 5.2.0
