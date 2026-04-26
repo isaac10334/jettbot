@@ -1,11 +1,9 @@
 # jettbot
 
-TODO:
-
-- [ ] Figure out details about the DiscordJS & OpenAI Realtime API, and how to fit them together elegantly, e.g. abstracting away ridiculous audio conversion problems.
+Goal: A realtime Discord bot that evolves AI voice bots beyond the simple "user speaks, AI responds" default. Jettbot can interject and interrupt, or stay quiet on purpose. Jettbot needs to be able to thrive in large calls with 6+ people. The entire architecture is modular and extendable, based on a powerful actor system developed here. Text to speech (TTS) is done per-user for great quality and implicit diarization. This necessitates a step to merge incoming transcripts in realtime and feed it to the bot's brain in a way that allows for high-quality responses. Jettbot is not a professional voice bot. It's more like an uncensored roleplay bot. But the key point here is that Jettbot's personality and voice are configurable, so it can be whatever you want.
 
 ```
-sDiscord Receiver
+Discord Receiver
    |
    v (control msgs: voiceJoin/voiceLeave)
 ┌──────────────────────────────┐

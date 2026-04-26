@@ -5,6 +5,7 @@ import { PcmFrameChunker } from '../audio/pcmFrameChunker';
 import { PcmJitterBuffer } from '../audio/pcmJitterBuffer';
 import { StereoToMono16LE } from '../audio/stereoToMono16le';
 import type { VoiceRuntime } from '../discord/voiceRuntime';
+import type { Logger } from '../app/logging';
 
 const RATE = 48_000;
 const OPUS_FRAME_SIZE = 960; // 20ms @ 48kHz
@@ -69,6 +70,7 @@ export class UserTrackActor {
             maxFrames: number;
             debug?: boolean;
             resubscribeAfterMs: number;
+            logger: Logger;
         },
     ) {
         this.jitter = new PcmJitterBuffer({
@@ -97,9 +99,10 @@ export class UserTrackActor {
             if (this.lastOpusAt && dt > this.opts.resubscribeAfterMs) {
                 this.stallCount++;
                 if (this.opts.debug) {
-                    console.log(
-                        `[track] ${this.userId} stalled (${dt}ms) -> resubscribe`,
-                    );
+                    this.opts.logger.warn('voice.track.stalled', {
+                        userId: this.userId,
+                        stalledForMs: dt,
+                    });
                 }
                 this.bumpBackoff();
                 this.subscribeFresh('stall');
@@ -216,9 +219,11 @@ export class UserTrackActor {
 
             if (monoFrame.length !== MONO_FRAME_BYTES) {
                 if (this.opts.debug) {
-                    console.warn(
-                        `[track] ${this.userId} bad mono frame size ${monoFrame.length} (expected ${MONO_FRAME_BYTES})`,
-                    );
+                    this.opts.logger.warn('voice.track.bad_mono_frame', {
+                        userId: this.userId,
+                        receivedBytes: monoFrame.length,
+                        expectedBytes: MONO_FRAME_BYTES,
+                    });
                 }
                 return;
             }
@@ -239,9 +244,11 @@ export class UserTrackActor {
                 this.destroyPipeline(old);
 
                 if (this.opts.debug) {
-                    console.log(
-                        `[track] ${this.userId} resubscribe ok (gen=${gen}, reason=${reason})`,
-                    );
+                    this.opts.logger.debug('voice.track.resubscribe_ok', {
+                        userId: this.userId,
+                        generation: gen,
+                        reason,
+                    });
                 }
             }
         });
@@ -253,10 +260,11 @@ export class UserTrackActor {
             this.errorCount++;
 
             if (this.opts.debug) {
-                console.log(
-                    `[track] ${this.userId} ${label} error -> resubscribe`,
-                    err ?? '',
-                );
+                this.opts.logger.warn('voice.track.pipeline_error', {
+                    userId: this.userId,
+                    label,
+                    error: String(err ?? ''),
+                });
             }
 
             this.bumpBackoff();
@@ -282,9 +290,9 @@ export class UserTrackActor {
             this.decodeTimeoutCount++;
 
             if (this.opts.debug) {
-                console.log(
-                    `[track] ${this.userId} decode timeout (opus but no pcm) -> resubscribe`,
-                );
+                this.opts.logger.warn('voice.track.decode_timeout', {
+                    userId: this.userId,
+                });
             }
 
             this.bumpBackoff();

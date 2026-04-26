@@ -1,2 +1,2 @@
-node = "20.18.1"
+node = "latest"
 pnpm = "10.15.1"

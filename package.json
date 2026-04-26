@@ -1,55 +1,29 @@
 {
   "name": "jettbot-again-fucking-jesus-christ",
-  "module": "index.ts",
   "type": "module",
   "private": true,
-  "main": "index.ts",
   "scripts": {
     "dev": "tsx src/loopback.ts",
-    "start": "node dist/index.js",
-    "build": "tsdown"
+    "bot": "tsx src/index.ts",
+    "build": "pnpm check",
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/config.test.ts tests/mix.test.ts tests/pcmJitterBuffer.test.ts tests/discord-live.e2e.test.ts",
+    "clean": "Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue"
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.0",
     "prettier": "^3.6.2",
-    "tsdown": "^0.15.7",
     "tsx": "^4.21.0",
-    "typescript-plugin-toml": "^0.5.0",
-    "unplugin-unused": "^0.5.4"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
-    "@effect/platform": "^0.92.1",
-    "@effect/platform-bun": "^0.81.1",
-    "@elevenlabs/client": "^0.14.0",
-    "@elevenlabs/elevenlabs-js": "^2.34.0",
-    "@livekit/rtc-node": "^0.13.20",
-    "@openai/agents": "^0.1.9",
-    "@snazzah/davey": "^0.1.7",
-    "@types/libsodium-wrappers": "^0.7.14",
     "@types/node": "^24.8.1",
     "discord.js": "^14.23.2",
     "dotenv": "^17.2.3",
-    "ffmpeg-static": "^5.2.0",
-    "libsodium-wrappers": "^0.7.15",
-    "livekit-client": "^2.15.15",
-    "livekit-server-sdk": "^2.14.0",
     "prism-media": "^1.3.5",
-    "rolldown": "1.0.0-beta.43",
-    "signal-exit": "^4.1.0",
-    "sodium-native": "5.0.9",
-    "terminal-kit": "^3.1.2",
-    "unplugin-info": "^1.2.4",
-    "unplugin-macros": "^0.18.2",
-    "uuid": "^13.0.0",
-    "vite-plugin-toml": "^0.8.5",
-    "wrtc": "^0.4.7",
-    "ws": "^8.18.3",
-    "zod": "3"
+    "ws": "^8.18.3"
   },
   "packageManager": "pnpm@10.15.1+sha512.34e538c329b5553014ca8e8f4535997f96180a1d0f614339357449935350d924e22f8614682191264ec33d1462ac21561aff97f6bb18065351c162c7e8f6de67"
 }

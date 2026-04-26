@@ -6,6 +6,8 @@ import { monoToStereo16LE } from '../audio/monoToStereo16le'
 import { PcmClockedReadable } from '../audio/PcmClockedReadable'
 import type { VoiceRuntime } from '../discord/voiceRuntime'
 import { UserTrackActor } from './UserTrackActor'
+import type { Logger } from '../app/logging'
+import type { BotStateStore } from '../app/state'
 
 const RATE = 48_000
 const OPUS_FRAME_SIZE = 960 // 20ms @ 48kHz
@@ -23,6 +25,7 @@ export type LoopbackMode =
 
 export class VoiceSessionActor {
   private tracks = new Map<string, UserTrackActor>()
+  private mixCursor = 0
 
   // Opus stream that goes into Discord
   private opusOut = new PassThrough({
@@ -55,7 +58,9 @@ export class VoiceSessionActor {
       maxFrames?: number
       resubscribeAfterMs?: number
       outputSilenceWhenEmpty?: boolean
-    } = {}
+      logger: Logger
+      state: BotStateStore
+    }
   ) {
     // Clocked PCM producer (always returns exactly 20ms stereo PCM)
     this.pcmSource = new PcmClockedReadable({
@@ -78,15 +83,17 @@ export class VoiceSessionActor {
 
   setLoopbackMode(mode: LoopbackMode) {
     this.mode = mode
+    this.opts.state.updateClient({ loopbackMode: mode.kind })
   }
 
   async start() {
     // Start playback once
     this.vr.playOpusStream(this.opusOut)
-    console.log('[debug] starting opus playback stream')
+    this.opts.logger.info('voice.playback.start')
     // Force flowing mode (removes ambiguity)
     this.opusOut.resume()
     this.pcmSource.resume()
+    this.opts.state.updateClient({ status: 'connected' })
 
     // Create tracks for users already in channel
     await this.refreshMembers()
@@ -106,6 +113,7 @@ export class VoiceSessionActor {
 
       if (!wasIn && isIn) this.addTrack(userId)
       if (wasIn && !isIn) this.removeTrack(userId)
+      if (wasIn !== isIn) void this.refreshMembers()
     })
 
     if (this.opts.debug) {
@@ -129,6 +137,13 @@ export class VoiceSessionActor {
     try {
       this.opusOut.end()
     } catch {}
+
+    this.opts.state.updateClient({
+      status: 'stopped',
+      trackCount: 0,
+      outputFramesPerSecond: 0,
+      tracks: [],
+    })
   }
 
   private async refreshMembers() {
@@ -136,10 +151,14 @@ export class VoiceSessionActor {
     const ch = await guild.channels.fetch(this.voiceChannelId)
     if (!ch?.isVoiceBased()) return
 
+    const memberIds: string[] = []
     for (const [userId, member] of ch.members) {
+      memberIds.push(userId)
       if (member.user.bot) continue
       this.addTrack(userId)
     }
+
+    this.opts.state.updateExternal({ connectedMemberIds: memberIds })
   }
 
   private addTrack(userId: string) {
@@ -150,12 +169,14 @@ export class VoiceSessionActor {
       maxFrames: this.opts.maxFrames ?? 200,
       resubscribeAfterMs: this.opts.resubscribeAfterMs ?? 2000,
       debug: this.opts.debug,
+      logger: this.opts.logger.child({ userId }),
     })
 
     t.start()
     this.tracks.set(userId, t)
+    this.opts.state.updateClient({ trackCount: this.tracks.size })
 
-    if (this.opts.debug) console.log(`[session] track add ${userId}`)
+    this.opts.logger.info('voice.track.add', { userId, trackCount: this.tracks.size })
   }
 
   private removeTrack(userId: string) {
@@ -163,7 +184,8 @@ export class VoiceSessionActor {
     if (!t) return
     t.stop()
     this.tracks.delete(userId)
-    if (this.opts.debug) console.log(`[session] track remove ${userId}`)
+    this.opts.state.updateClient({ trackCount: this.tracks.size })
+    this.opts.logger.info('voice.track.remove', { userId, trackCount: this.tracks.size })
   }
 
   private makeOutputFrame(): Buffer {
@@ -275,6 +297,28 @@ export class VoiceSessionActor {
     const made = this.framesMadeThisSec
     this.framesMadeThisSec = 0
 
-    console.log(`[session] outFrames/s=${made} | ${rows.join(' | ')}`)
+    const tracks = Array.from(this.tracks.entries()).map(([userId, track]) => ({
+      userId,
+      jitterFrames: track.jitter.size(),
+      primed: track.jitter.isPrimed(),
+      opusPacketsPerSecond: track.opusPktsThisSec,
+      pcmFramesPerSecond: track.pcmFramesThisSec,
+      biggestOpusGapMs: track.biggestOpusGapMs,
+      resubscribeCount: track.resubscribeCount,
+      stallCount: track.stallCount,
+    }))
+
+    this.opts.state.updateClient({
+      outputFramesPerSecond: made,
+      trackCount: this.tracks.size,
+      tracks,
+    })
+
+    this.opts.logger.info('voice.session.stats', {
+      outputFramesPerSecond: made,
+      trackCount: this.tracks.size,
+      tracks,
+      summary: rows,
+    })
   }
 }

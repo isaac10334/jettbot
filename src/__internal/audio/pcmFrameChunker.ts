@@ -6,7 +6,7 @@ import { Transform, type TransformCallback } from 'node:stream'
  */
 export class PcmFrameChunker extends Transform {
   private readonly frameBytes: number
-  private buffer = Buffer.alloc(0)
+  private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0)
 
   constructor(frameBytes: number) {
     super()
@@ -15,7 +15,7 @@ export class PcmFrameChunker extends Transform {
 
   override _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback) {
     this.buffer =
-      this.buffer.length === 0 ? chunk : (Buffer.concat([this.buffer, chunk]) as ArrayBuffer<any>)
+      this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk])
 
     while (this.buffer.length >= this.frameBytes) {
       this.push(this.buffer.subarray(0, this.frameBytes))
