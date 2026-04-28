@@ -1,59 +1,48 @@
-# jettbot
+# Jettbot
 
-Goal: A realtime Discord bot that evolves AI voice bots beyond the simple "user speaks, AI responds" default. Jettbot can interject and interrupt, or stay quiet on purpose. Jettbot needs to be able to thrive in large calls with 6+ people. The entire architecture is modular and extendable, based on a powerful actor system developed here. Text to speech (TTS) is done per-user for great quality and implicit diarization. This necessitates a step to merge incoming transcripts in realtime and feed it to the bot's brain in a way that allows for high-quality responses. Jettbot is not a professional voice bot. It's more like an uncensored roleplay bot. But the key point here is that Jettbot's personality and voice are configurable, so it can be whatever you want.
+Jettbot is a Discord bot split into two processes:
 
+- Bun + TypeScript owns Discord text/slash commands, AI orchestration, transcription, TTS, tools, memory, and Installed Runtime Architecture lifecycle.
+- Rust owns Discord voice via Serenity/Songbird, voice receive, playback, and voice session state.
+
+## Prerequisites
+
+- Bun 1.3+
+- Rust 1.89+
+- A Discord bot token and application ID
+- AssemblyAI API key
+- ElevenLabs API key and voice ID
+- Vercel AI Gateway key or OIDC environment
+- Optional: Turso database URL/token
+- Optional: `yt-dlp` and `ffmpeg`
+
+Songbird depends on Opus. On Windows this may require a working C toolchain and CMake when the Opus crate builds native code.
+
+## Setup
+
+```sh
+bun install
+cp .env.example .env
+bun run sidecar:build
+bun run dev
 ```
-Discord Receiver
-   |
-   v (control msgs: voiceJoin/voiceLeave)
-┌──────────────────────────────┐
-│ VoiceIngressActor            │
-│  - spawns UserTrackActor     │
-└──────────────┬───────────────┘
-               │ owns children
-               v
-┌──────────────────────────────┐
-│ UserTrackActor (per user)    │
-│  - opus subscribe            │
-│  - decode -> 16k mono        │
-│  - jitter buffer             │
-│  - publishes:                │
-│     dir.provide("userFrames:<uid>", InPort<Pcm16kMonoFrame>) │
-└──────────────┬───────────────┘
-               │ (InPort published per user)
-               v
-┌──────────────────────────────┐
-│ ModeSupervisorActor          │
-│  - owns active composition   │
-│  - sets mode: loopback/agent │
-└──────────────┬───────────────┘
-               │
-     ┌─────────┴─────────┐
-     │                   │
-     v                   v
 
-LOOPBACK MODE:                       AGENT MODE:
-┌──────────────────────────────┐    ┌──────────────────────────────┐
-│ LoopbackMixerActor           │    │ TranscriptHubActor            │
-│  - watches userFrames:*      │    │  - watches sttOut:*           │
-│  - mixes (20ms tick)         │    │  - merges transcripts         │
-│  - produces mixed audio      │    └──────────────┬───────────────┘
-└──────────────┬───────────────┘                   │ InPort<Transcript>
-               │ OutPort<MixedPcm48kStereoFrame>    v
-               │ (attached to Egress)       ┌────────────────────────┐
-               v                            │ BrainActor              │
-┌──────────────────────────────┐            │  - consumes transcripts  │
-│ EgressActor                  │            │  - emits text chunks     │
-│  - owns Discord audio out    │            └──────────┬─────────────┘
-│  - consumes mixed pcm        │                       │ InPort<string>
-└──────────────────────────────┘                       v
-                                            ┌────────────────────────┐
-                                            │ TtsActor                │
-                                            │  - consumes text chunks  │
-                                            │  - produces pcm frames   │
-                                            └──────────┬─────────────┘
-                                                       │ OutPort<Pcm48kStereo>
-                                                       v
-                                                  EgressActor
+The sidecar receives `DISCORD_BOT_TOKEN` through its environment at startup. IPC is JSON Lines over stdio; sidecar stdout is protocol only and stderr is logs only.
 
-```
+## Scripts
+
+- `bun run dev` starts the Bun bot.
+- `bun run typecheck` runs TypeScript checks.
+- `bun test` runs Bun tests.
+- `bun run sidecar:build` builds the Rust sidecar release binary.
+- `bun run sidecar:dev` runs the Rust sidecar directly.
+- `bun run check` runs TypeScript, Bun tests, and Rust tests.
+
+## Current Limitations
+
+- One voice session is supported at a time.
+- Rust receive uses Songbird decoded `VoiceTick` events and emits per-user PCM S16LE chunks.
+- Playback IPC and queueing are implemented; the first pass treats arbitrary TTS bytes as a sidecar playback stream boundary. Exact Discord-ready transcoding remains a focused follow-up if the provider output is not directly accepted by Songbird.
+- Tool calling is registered behind a service interface; deep AI SDK tool execution is intentionally minimal in this pass.
+- Turso memory starts with schema creation, recent search, and FTS-style text search. Vector search is reserved for a later embeddings pass.
+
