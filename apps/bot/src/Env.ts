@@ -7,6 +7,11 @@ export interface Env {
   readonly JETTBOT_LOG_LEVEL: "debug" | "info" | "warn" | "error";
   readonly JETTBOT_LOG_FILE_PATH: string;
   readonly JETTBOT_LOG_MAX_ENTRIES: number;
+  readonly JETTBOT_SIDECAR_LOG_FILE_PATH: string;
+  readonly JETTBOT_SIDECAR_CONSOLE_LEVEL: "off" | "debug" | "info" | "warn" | "error";
+  readonly JETTBOT_SIDECAR_RUST_LOG: string;
+  readonly JETTBOT_REALTIME_DEBUG_ENABLED: boolean;
+  readonly JETTBOT_REALTIME_DEBUG_DIR: string;
   readonly JETTBOT_OBSERVABILITY_FLUSH_INTERVAL_MS: number;
   readonly JETTBOT_METRICS_FILE_PATH: string;
   readonly ASSEMBLYAI_API_KEY: string;
@@ -19,6 +24,11 @@ export interface Env {
   readonly ELEVENLABS_OUTPUT_FORMAT: string;
   readonly AI_GATEWAY_API_KEY: string;
   readonly AI_GATEWAY_MODEL: string;
+  readonly BRAVE_SEARCH_API_KEY: string;
+  readonly JETTBOT_IMAGE_SEARCH_COUNT: number;
+  readonly JETTBOT_IMAGE_SEARCH_RATE_LIMIT_COUNT: number;
+  readonly JETTBOT_IMAGE_SEARCH_RATE_LIMIT_WINDOW_MS: number;
+  readonly JETTBOT_IMAGE_SEARCH_SESSION_TTL_MS: number;
   readonly TURSO_DATABASE_URL?: string;
   readonly TURSO_AUTH_TOKEN?: string;
   readonly YOUTUBE_COOKIES_PATH?: string;
@@ -49,6 +59,11 @@ const parseLogLevel = (value: string): Env["JETTBOT_LOG_LEVEL"] | undefined => {
   return undefined;
 };
 
+const parseSidecarConsoleLevel = (value: string): Env["JETTBOT_SIDECAR_CONSOLE_LEVEL"] | undefined => {
+  if (value === "off" || value === "debug" || value === "info" || value === "warn" || value === "error") return value;
+  return undefined;
+};
+
 const parsePositiveInteger = (source: EnvSource, key: string, fallback: number, errors: string[]): number => {
   const text = optional(source, key);
   if (text == null) return fallback;
@@ -58,6 +73,15 @@ const parsePositiveInteger = (source: EnvSource, key: string, fallback: number, 
     return fallback;
   }
   return value;
+};
+
+const parseBoolean = (source: EnvSource, key: string, fallback: boolean, errors: string[]): boolean => {
+  const text = optional(source, key);
+  if (text == null) return fallback;
+  if (text === "true" || text === "1" || text === "yes") return true;
+  if (text === "false" || text === "0" || text === "no") return false;
+  errors.push(`${key} must be true or false`);
+  return fallback;
 };
 
 export const parseEnv = (source: EnvSource = Bun.env): EnvParseResult => {
@@ -72,13 +96,23 @@ export const parseEnv = (source: EnvSource = Bun.env): EnvParseResult => {
   const sampleRate = Number.parseInt(sampleRateText, 10);
   if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
     errors.push("ASSEMBLYAI_SAMPLE_RATE must be a positive integer");
+  } else if (sampleRate !== 16000) {
+    errors.push("ASSEMBLYAI_SAMPLE_RATE must be 16000 until the voice normalization path supports other rates");
   }
 
   const logLevelText = optional(source, "JETTBOT_LOG_LEVEL") ?? "info";
   const logLevel = parseLogLevel(logLevelText);
   if (logLevel == null) errors.push("JETTBOT_LOG_LEVEL must be debug, info, warn, or error");
+  const sidecarConsoleLevelText = optional(source, "JETTBOT_SIDECAR_CONSOLE_LEVEL") ?? "warn";
+  const sidecarConsoleLevel = parseSidecarConsoleLevel(sidecarConsoleLevelText);
+  if (sidecarConsoleLevel == null) errors.push("JETTBOT_SIDECAR_CONSOLE_LEVEL must be off, debug, info, warn, or error");
   const logMaxEntries = parsePositiveInteger(source, "JETTBOT_LOG_MAX_ENTRIES", 2_000, errors);
+  const realtimeDebugEnabled = parseBoolean(source, "JETTBOT_REALTIME_DEBUG_ENABLED", true, errors);
   const observabilityFlushIntervalMs = parsePositiveInteger(source, "JETTBOT_OBSERVABILITY_FLUSH_INTERVAL_MS", 1_000, errors);
+  const imageSearchCount = parsePositiveInteger(source, "JETTBOT_IMAGE_SEARCH_COUNT", 20, errors);
+  const imageSearchRateLimitCount = parsePositiveInteger(source, "JETTBOT_IMAGE_SEARCH_RATE_LIMIT_COUNT", 5, errors);
+  const imageSearchRateLimitWindowMs = parsePositiveInteger(source, "JETTBOT_IMAGE_SEARCH_RATE_LIMIT_WINDOW_MS", 60_000, errors);
+  const imageSearchSessionTtlMs = parsePositiveInteger(source, "JETTBOT_IMAGE_SEARCH_SESSION_TTL_MS", 10 * 60_000, errors);
 
   const ipcMode = optional(source, "JETTBOT_IPC_MODE") ?? "stdio";
   if (ipcMode !== "stdio") errors.push("JETTBOT_IPC_MODE must be stdio");
@@ -97,6 +131,11 @@ export const parseEnv = (source: EnvSource = Bun.env): EnvParseResult => {
     JETTBOT_LOG_LEVEL: logLevel ?? "info",
     JETTBOT_LOG_FILE_PATH: optional(source, "JETTBOT_LOG_FILE_PATH") ?? "./logs/jettbot.log.jsonl",
     JETTBOT_LOG_MAX_ENTRIES: logMaxEntries,
+    JETTBOT_SIDECAR_LOG_FILE_PATH: optional(source, "JETTBOT_SIDECAR_LOG_FILE_PATH") ?? "./logs/sidecar.log",
+    JETTBOT_SIDECAR_CONSOLE_LEVEL: sidecarConsoleLevel ?? "warn",
+    JETTBOT_SIDECAR_RUST_LOG: optional(source, "JETTBOT_SIDECAR_RUST_LOG") ?? "warn,jettbot_voice_sidecar=info",
+    JETTBOT_REALTIME_DEBUG_ENABLED: realtimeDebugEnabled,
+    JETTBOT_REALTIME_DEBUG_DIR: optional(source, "JETTBOT_REALTIME_DEBUG_DIR") ?? "./logs/realtime",
     JETTBOT_OBSERVABILITY_FLUSH_INTERVAL_MS: observabilityFlushIntervalMs,
     JETTBOT_METRICS_FILE_PATH: optional(source, "JETTBOT_METRICS_FILE_PATH") ?? "./logs/metrics.json",
     ASSEMBLYAI_API_KEY: need("ASSEMBLYAI_API_KEY"),
@@ -106,9 +145,14 @@ export const parseEnv = (source: EnvSource = Bun.env): EnvParseResult => {
     ELEVENLABS_API_KEY: need("ELEVENLABS_API_KEY"),
     ELEVENLABS_VOICE_ID: need("ELEVENLABS_VOICE_ID"),
     ELEVENLABS_MODEL_ID: optional(source, "ELEVENLABS_MODEL_ID") ?? "eleven_multilingual_v2",
-    ELEVENLABS_OUTPUT_FORMAT: optional(source, "ELEVENLABS_OUTPUT_FORMAT") ?? "opus_48000_128",
+    ELEVENLABS_OUTPUT_FORMAT: optional(source, "ELEVENLABS_OUTPUT_FORMAT") ?? "pcm_24000",
     AI_GATEWAY_API_KEY: need("AI_GATEWAY_API_KEY"),
     AI_GATEWAY_MODEL: optional(source, "AI_GATEWAY_MODEL") ?? "openai/gpt-5.4",
+    BRAVE_SEARCH_API_KEY: need("BRAVE_SEARCH_API_KEY"),
+    JETTBOT_IMAGE_SEARCH_COUNT: Math.min(imageSearchCount, 200),
+    JETTBOT_IMAGE_SEARCH_RATE_LIMIT_COUNT: imageSearchRateLimitCount,
+    JETTBOT_IMAGE_SEARCH_RATE_LIMIT_WINDOW_MS: imageSearchRateLimitWindowMs,
+    JETTBOT_IMAGE_SEARCH_SESSION_TTL_MS: imageSearchSessionTtlMs,
     ...(tursoDatabaseUrl ? { TURSO_DATABASE_URL: tursoDatabaseUrl } : {}),
     ...(tursoAuthToken ? { TURSO_AUTH_TOKEN: tursoAuthToken } : {}),
     ...(youtubeCookiesPath ? { YOUTUBE_COOKIES_PATH: youtubeCookiesPath } : {}),

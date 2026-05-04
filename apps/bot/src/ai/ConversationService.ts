@@ -21,8 +21,8 @@ export const createConversationService = (input: {
 }): ConversationService => ({
     buildMessages: async (turn) => {
         const recentMemory = await input.memory.getRecentConversation(
-            undefined,
-            undefined,
+            turn.guildId,
+            turn.channelId,
             turn.userId,
         );
         const transcriptContext = input.transcripts
@@ -33,7 +33,7 @@ export const createConversationService = (input: {
             {
                 role: 'system',
                 content:
-                    'You are Jettbot, a concise Discord voice assistant. Reply naturally for TTS. Keep responses short unless asked for detail.',
+                    'You simulate the next single turn in a Discord voice conversation. Return exactly one likely next turn as structured data. The speaker can be any participant or Jettbot. Use speaker "Jettbot" only when Jettbot should actually speak. Keep Jettbot text concise and natural for TTS.',
             },
             ...(recentMemory.length > 0
                 ? [
@@ -45,7 +45,7 @@ export const createConversationService = (input: {
                 : []),
             {
                 role: 'user',
-                content: `Conversation so far:\n${transcriptContext}\n\nRespond to ${turn.userId}: ${turn.text}`,
+                content: `Conversation so far:\n${transcriptContext}\n\nMost recent final turn: ${turn.userId}: ${turn.text}\n\nPredict the next single turn.`,
             },
         ];
     },

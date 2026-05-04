@@ -1,11 +1,37 @@
-import type { YoutubeService } from "../../youtube/YoutubeService";
+import type { YoutubePlaybackService } from "../../youtube/YoutubePlaybackService";
+import type { VoiceService } from "../../voice/VoiceService";
 import type { ToolDefinition } from "../ToolRegistry";
 
-export const createYoutubeAudioTool = (youtube: YoutubeService): ToolDefinition<{ readonly query: string }, { readonly title?: string; readonly url: string; readonly status: string }> => ({
+export interface YoutubeAudioToolResult {
+  readonly title?: string;
+  readonly url: string;
+  readonly durationSeconds?: number;
+  readonly status: "queued" | "playing";
+  readonly queuePosition: number;
+}
+
+export const createYoutubeAudioTool = (
+  youtubePlayback: YoutubePlaybackService,
+  voice: VoiceService,
+): ToolDefinition<{ readonly guildId: string; readonly query: string }, YoutubeAudioToolResult> => ({
   name: "youtube_audio",
-  description: "Resolve YouTube audio metadata. Playback routing is a follow-up.",
+  description: "Resolve and play YouTube audio in the active Discord voice session.",
   call: async (input) => {
-    const media = await youtube.resolve(input.query);
-    return { ...(media.title ? { title: media.title } : {}), url: media.webpageUrl ?? media.url, status: "resolved" };
+    if (voice.getGuildState(input.guildId).status !== "connected") {
+      throw new Error("Join a voice channel first.");
+    }
+    const result = await youtubePlayback.enqueue({
+      guildId: input.guildId,
+      query: input.query,
+      requestedByUserId: "tool",
+    });
+    const media = result.item.media;
+    return {
+      ...(media?.title ? { title: media.title } : {}),
+      url: media?.webpageUrl ?? media?.url ?? input.query,
+      ...(media?.durationSeconds != null ? { durationSeconds: media.durationSeconds } : {}),
+      status: result.position <= 1 ? "playing" : "queued",
+      queuePosition: result.position,
+    };
   },
 });

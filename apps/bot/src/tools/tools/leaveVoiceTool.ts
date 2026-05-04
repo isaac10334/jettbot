@@ -3,11 +3,11 @@ import type { ToolDefinition } from '../ToolRegistry';
 
 export const createLeaveVoiceTool = (
     voice: VoiceService,
-): ToolDefinition<void, { readonly ok: true }> => ({
+): ToolDefinition<{ readonly guildId: string }, { readonly ok: true }> => ({
     name: 'leave_voice',
     description: 'Leave the active Discord voice channel.',
-    call: async () => {
-        await voice.requestLeaveVoice();
+    call: async (input) => {
+        await voice.requestLeaveVoice(input.guildId);
         return { ok: true };
     },
 });

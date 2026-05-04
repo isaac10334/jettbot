@@ -1,9 +1,13 @@
+export type ImageSafeSearch = "strict" | "off";
+
+export const defaultImageSafeSearch: ImageSafeSearch = "off";
+
 export interface ImageSearchRequest {
   readonly query: string;
   readonly count?: number;
   readonly country?: string;
   readonly searchLang?: string;
-  readonly safeSearch?: "strict" | "off";
+  readonly safeSearch?: ImageSafeSearch;
 }
 
 export interface ImageSearchResult {

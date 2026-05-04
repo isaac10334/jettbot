@@ -7,19 +7,62 @@ mod sessions;
 mod voice;
 
 use std::env;
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use errors::{Result, SidecarError};
 use playback::PlaybackState;
 use protocol::{SidecarCommand, SidecarEvent, SidecarOutput};
-use serenity::{client::Client, prelude::GatewayIntents};
+use serenity::{async_trait, client::Client, model::id::GuildId, prelude::GatewayIntents};
 use sessions::SessionState;
-use songbird::SerenityInit;
+use songbird::{
+    Event, EventContext, EventHandler as SongbirdEventHandler, SerenityInit, TrackEvent,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     sync::{mpsc, Mutex},
 };
 use tracing::{error, warn};
+
+#[derive(Clone)]
+struct PlaybackTrackEventHandler {
+    guild_id: String,
+    stream_id: String,
+    stage: &'static str,
+    events: mpsc::UnboundedSender<SidecarEvent>,
+    byte_count: Option<u64>,
+}
+
+#[async_trait]
+impl SongbirdEventHandler for PlaybackTrackEventHandler {
+    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        let (message, position_ms) = match ctx {
+            EventContext::Track(&[(state, _)]) => (
+                format!("track_state={:?}", state.playing),
+                Some(state.play_time.as_millis() as u64),
+            ),
+            EventContext::Track(tracks) => (format!("track_count={}", tracks.len()), None),
+            _ => ("non_track_context".to_string(), None),
+        };
+        let _ = self.events.send(SidecarEvent::PlaybackDebug {
+            guild_id: Some(self.guild_id.clone()),
+            stream_id: self.stream_id.clone(),
+            stage: self.stage.to_string(),
+            message,
+            byte_count: self.byte_count,
+            position_ms,
+        });
+        if self.stage == "end" {
+            let _ = self.events.send(SidecarEvent::PlaybackFinished {
+                guild_id: Some(self.guild_id.clone()),
+                stream_id: self.stream_id.clone(),
+                chunk_count: 0,
+                byte_count: self.byte_count.unwrap_or_default(),
+            });
+        }
+        Some(Event::Cancel)
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -155,24 +198,129 @@ async fn handle_command(
                 session_id: session.session_id,
             }));
         }
-        SidecarCommand::LeaveVoice { .. } => {
+        SidecarCommand::LeaveVoice { guild_id, .. } => {
             let context = discord_state
                 .context()
                 .await
                 .ok_or(SidecarError::DiscordNotReady)?;
             let mut state = session_state.lock().await;
-            let session = voice::leave_voice(&context, &mut state).await?;
+            let session = voice::leave_voice(&context, &mut state, &guild_id).await?;
             let _ = out.send(SidecarOutput::Event(SidecarEvent::LeftVoice {
+                guild_id: Some(guild_id),
                 session_id: session.map(|value| value.session_id),
             }));
         }
-        SidecarCommand::StartReceive { .. } | SidecarCommand::StopReceive { .. } => {}
+        SidecarCommand::StartReceive { guild_id, .. } => {
+            let state = session_state.lock().await;
+            let session = state.get(&guild_id).ok_or(SidecarError::NotJoined)?;
+            session.set_receive_enabled(true);
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::VoiceDebug {
+                stage: "receive_enabled".into(),
+                message: "sidecar receive events are enabled".into(),
+                guild_id: Some(session.guild_id.clone()),
+                channel_id: Some(session.channel_id.clone()),
+                session_id: Some(session.session_id.clone()),
+                user_id: None,
+                byte_count: None,
+            }));
+        }
+        SidecarCommand::StopReceive { guild_id, .. } => {
+            let state = session_state.lock().await;
+            let session = state.get(&guild_id).ok_or(SidecarError::NotJoined)?;
+            session.set_receive_enabled(false);
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::VoiceDebug {
+                stage: "receive_disabled".into(),
+                message: "sidecar receive events are disabled".into(),
+                guild_id: Some(session.guild_id.clone()),
+                channel_id: Some(session.channel_id.clone()),
+                session_id: Some(session.session_id.clone()),
+                user_id: None,
+                byte_count: None,
+            }));
+        }
         SidecarCommand::PlayAudioStreamBegin {
+            guild_id,
             stream_id, format, ..
         } => {
-            let _format = format;
-            playback_state.lock().await.begin(&stream_id);
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: Some(guild_id.clone()),
+                stream_id: stream_id.clone(),
+                stage: "command_received".into(),
+                message: format!("format={format}"),
+                byte_count: None,
+                position_ms: None,
+            }));
+            let context = discord_state
+                .context()
+                .await
+                .ok_or(SidecarError::DiscordNotReady)?;
+            let state = session_state.lock().await;
+            let session = state.get(&guild_id).ok_or(SidecarError::NotJoined)?.clone();
+            drop(state);
+            let guild = GuildId::new(
+                session
+                    .guild_id
+                    .parse()
+                    .map_err(|_| SidecarError::InvalidId(session.guild_id.clone()))?,
+            );
+            let manager = songbird::get(&context)
+                .await
+                .ok_or(SidecarError::DiscordNotReady)?
+                .clone();
+            let handler_lock = manager.get(guild).ok_or(SidecarError::NotJoined)?;
+            let input = playback_state.lock().await.begin(&stream_id, &format)?;
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: Some(guild_id.clone()),
+                stream_id: stream_id.clone(),
+                stage: "input_created".into(),
+                message: "streaming raw adapter input created".into(),
+                byte_count: None,
+                position_ms: None,
+            }));
+            {
+                let mut handler = handler_lock.lock().await;
+                let handle = handler.play_input(input);
+                let _ = handle.add_event(
+                    Event::Track(TrackEvent::Playable),
+                    PlaybackTrackEventHandler {
+                        guild_id: guild_id.clone(),
+                        stream_id: stream_id.clone(),
+                        stage: "playable",
+                        events: events.clone(),
+                        byte_count: None,
+                    },
+                );
+                let _ = handle.add_event(
+                    Event::Track(TrackEvent::Error),
+                    PlaybackTrackEventHandler {
+                        guild_id: guild_id.clone(),
+                        stream_id: stream_id.clone(),
+                        stage: "error",
+                        events: events.clone(),
+                        byte_count: None,
+                    },
+                );
+                let _ = handle.add_event(
+                    Event::Track(TrackEvent::End),
+                    PlaybackTrackEventHandler {
+                        guild_id: guild_id.clone(),
+                        stream_id: stream_id.clone(),
+                        stage: "end",
+                        events: events.clone(),
+                        byte_count: None,
+                    },
+                );
+                let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                    guild_id: Some(guild_id.clone()),
+                    stream_id: stream_id.clone(),
+                    stage: "track_submitted".into(),
+                    message: "stream track handle submitted with playable/error/end events".into(),
+                    byte_count: None,
+                    position_ms: None,
+                }));
+            }
             let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackStarted {
+                guild_id: Some(guild_id),
                 stream_id,
             }));
         }
@@ -184,15 +332,195 @@ async fn handle_command(
             let bytes = STANDARD
                 .decode(bytes_base64)
                 .map_err(|_| SidecarError::InvalidId("invalid base64 audio chunk".into()))?;
-            playback_state.lock().await.push(&stream_id, &bytes)?;
-        }
-        SidecarCommand::PlayAudioStreamEnd { stream_id, .. } => {
-            let _bytes = playback_state.lock().await.end(&stream_id);
-            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackFinished {
+            let stats = playback_state.lock().await.push(&stream_id, &bytes)?;
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackChunk {
+                guild_id: None,
                 stream_id,
+                chunk_count: stats.chunk_count,
+                byte_count: stats.byte_count,
             }));
         }
-        SidecarCommand::StopPlayback { .. } => playback_state.lock().await.stop(),
+        SidecarCommand::PlayAudioStreamEnd { stream_id, .. } => {
+            let stats = playback_state.lock().await.end(&stream_id);
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: None,
+                stream_id,
+                stage: "input_closed".into(),
+                message: format!(
+                    "stream input closed chunk_count={}",
+                    stats
+                        .as_ref()
+                        .map(|value| value.chunk_count)
+                        .unwrap_or_default()
+                ),
+                byte_count: Some(
+                    stats
+                        .as_ref()
+                        .map(|value| value.byte_count)
+                        .unwrap_or_default(),
+                ),
+                position_ms: None,
+            }));
+        }
+        SidecarCommand::PlayAudioFile {
+            guild_id,
+            stream_id,
+            path,
+            format,
+            ..
+        } => {
+            let byte_count = std::fs::metadata(&path).ok().map(|value| value.len());
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: Some(guild_id.clone()),
+                stream_id: stream_id.clone(),
+                stage: "command_received".into(),
+                message: format!("path={path} format={format}"),
+                byte_count,
+                position_ms: None,
+            }));
+            let context = discord_state
+                .context()
+                .await
+                .ok_or(SidecarError::DiscordNotReady)?;
+            let state = session_state.lock().await;
+            let session = state.get(&guild_id).ok_or(SidecarError::NotJoined)?.clone();
+            drop(state);
+            let guild = GuildId::new(
+                session
+                    .guild_id
+                    .parse()
+                    .map_err(|_| SidecarError::InvalidId(session.guild_id.clone()))?,
+            );
+            let manager = songbird::get(&context)
+                .await
+                .ok_or(SidecarError::DiscordNotReady)?
+                .clone();
+            let handler_lock = manager.get(guild).ok_or(SidecarError::NotJoined)?;
+            let (input, input_message) = if format.starts_with("wav_") {
+                (
+                    playback::create_wav_file_input(&path, &format)?,
+                    "wav file input created",
+                )
+            } else {
+                let _ = playback::validate_f32_file_input(&path, &format)?;
+                (
+                    playback::create_f32_file_input(&path, &format)?,
+                    "raw adapter input created",
+                )
+            };
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: Some(guild_id.clone()),
+                stream_id: stream_id.clone(),
+                stage: "file_validated".into(),
+                message: format!("file validated as {format}"),
+                byte_count,
+                position_ms: None,
+            }));
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: Some(guild_id.clone()),
+                stream_id: stream_id.clone(),
+                stage: "input_created".into(),
+                message: input_message.into(),
+                byte_count,
+                position_ms: None,
+            }));
+            {
+                let mut handler = handler_lock.lock().await;
+                let handle = handler.play_only_input(input);
+                let _ = handle.add_event(
+                    Event::Track(TrackEvent::Playable),
+                    PlaybackTrackEventHandler {
+                        guild_id: guild_id.clone(),
+                        stream_id: stream_id.clone(),
+                        stage: "playable",
+                        events: events.clone(),
+                        byte_count,
+                    },
+                );
+                let _ = handle.add_event(
+                    Event::Track(TrackEvent::Error),
+                    PlaybackTrackEventHandler {
+                        guild_id: guild_id.clone(),
+                        stream_id: stream_id.clone(),
+                        stage: "error",
+                        events: events.clone(),
+                        byte_count,
+                    },
+                );
+                let _ = handle.add_event(
+                    Event::Track(TrackEvent::End),
+                    PlaybackTrackEventHandler {
+                        guild_id: guild_id.clone(),
+                        stream_id: stream_id.clone(),
+                        stage: "end",
+                        events: events.clone(),
+                        byte_count,
+                    },
+                );
+                let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                    guild_id: Some(guild_id.clone()),
+                    stream_id: stream_id.clone(),
+                    stage: "track_submitted".into(),
+                    message: "track handle submitted with playable/error/end events".into(),
+                    byte_count,
+                    position_ms: None,
+                }));
+            }
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackStarted {
+                guild_id: Some(guild_id.clone()),
+                stream_id: stream_id.clone(),
+            }));
+            let probe_events = events.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let _ = probe_events.send(SidecarEvent::PlaybackDebug {
+                    guild_id: Some(guild_id),
+                    stream_id,
+                    stage: "two_second_probe".into(),
+                    message: "track should be audible or about to be audible".into(),
+                    byte_count,
+                    position_ms: None,
+                });
+            });
+        }
+        SidecarCommand::StopPlayback { guild_id, .. } => {
+            let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                guild_id: Some(guild_id.clone()),
+                stream_id: "all".into(),
+                stage: "stop_requested".into(),
+                message: "stop playback requested".into(),
+                byte_count: None,
+                position_ms: None,
+            }));
+            let stream_ids = playback_state.lock().await.stream_ids();
+            for stream_id in stream_ids {
+                let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
+                    guild_id: Some(guild_id.clone()),
+                    stream_id,
+                    stage: "stop_requested".into(),
+                    message: "stop playback requested for active stream".into(),
+                    byte_count: None,
+                    position_ms: None,
+                }));
+            }
+            playback_state.lock().await.stop();
+            if let Some(context) = discord_state.context().await {
+                let state = session_state.lock().await;
+                if let Some(session) = state.get(&guild_id) {
+                    let guild = GuildId::new(
+                        session
+                            .guild_id
+                            .parse()
+                            .map_err(|_| SidecarError::InvalidId(session.guild_id.clone()))?,
+                    );
+                    if let Some(manager) = songbird::get(&context).await {
+                        if let Some(handler_lock) = manager.get(guild) {
+                            handler_lock.lock().await.stop();
+                        }
+                    }
+                }
+            }
+        }
         SidecarCommand::EmitFakeUserAudio {
             user_id,
             pcm_s16le_base64,

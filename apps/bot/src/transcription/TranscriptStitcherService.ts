@@ -1,6 +1,9 @@
 import { createSignal, type Signal } from "@loop-kit/common/Signal";
 
 export interface TranscriptTurn {
+  readonly guildId: string;
+  readonly channelId: string;
+  readonly sessionId: string;
   readonly userId: string;
   readonly username?: string;
   readonly text: string;
@@ -32,4 +35,3 @@ export const createTranscriptStitcherService = (): TranscriptStitcherService => 
     recentContext: (limit = 20) => timeline.slice(-limit),
   };
 };
-

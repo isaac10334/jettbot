@@ -2,10 +2,10 @@
 .env.local
 node_modules
 bun.lockb
+logs/
 target
 dist
 .DS_Store
 *.log
 *.db
 *.db-*
-

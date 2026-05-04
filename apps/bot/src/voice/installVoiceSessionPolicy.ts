@@ -4,23 +4,24 @@ import type { AppEnv } from "../app/AppRuntime";
 export const installVoiceSessionPolicy: Installer<AppEnv> = (runtime) => {
   const unsubscribe = runtime.env.signals.sidecarEvent.subscribe((event) => {
     if (event.type === "JoinedVoice") {
-      runtime.env.voice.state.set({
+      runtime.env.voice.setGuildState(event.guild_id, {
         status: "connected",
         guildId: event.guild_id,
         channelId: event.channel_id,
         sessionId: event.session_id,
       });
-      void runtime.env.sidecar.call({ type: "StartReceive" }).catch((error) => {
-        runtime.env.voice.state.set({ status: "error", message: error instanceof Error ? error.message : String(error) });
+      void runtime.env.sidecar.call({ type: "StartReceive", guild_id: event.guild_id }).catch((error) => {
+        runtime.env.voice.setGuildState(event.guild_id, { status: "error", guildId: event.guild_id, message: error instanceof Error ? error.message : String(error) });
       });
     }
     if (event.type === "LeftVoice") {
-      runtime.env.voice.state.set({ status: "disconnected" });
+      const guildId = event.guild_id;
+      if (guildId) runtime.env.voice.setGuildState(guildId, { status: "disconnected", guildId });
     }
     if (event.type === "Error") {
-      runtime.env.voice.state.set({ status: "error", message: event.message });
+      const connecting = Object.values(runtime.env.voice.state.get().sessions).find((value) => value.status === "connecting" || value.status === "disconnecting");
+      if (connecting) runtime.env.voice.setGuildState(connecting.guildId, { status: "error", guildId: connecting.guildId, message: event.message });
     }
   });
   return installedVoid(unsubscribe);
 };
-

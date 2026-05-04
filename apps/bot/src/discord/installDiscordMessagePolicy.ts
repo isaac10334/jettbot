@@ -4,6 +4,7 @@ import type { AppEnv } from "../app/AppRuntime";
 export const installDiscordMessagePolicy: Installer<AppEnv> = (runtime) => {
   const unsubscribe = runtime.env.discord.messages.subscribe((message) => {
     if (message.author.bot || !message.guildId) return;
+    const messageGuildId = message.guildId;
     const content = message.content.trim();
     void (async () => {
       if (/^jett\s+join$/i.test(content)) {
@@ -17,12 +18,12 @@ export const installDiscordMessagePolicy: Installer<AppEnv> = (runtime) => {
         await runtime.env.voice.requestJoinVoice(guildId, channelId);
         await message.reply("Joining voice.");
       } else if (/^jett\s+leave$/i.test(content)) {
-        await runtime.env.voice.requestLeaveVoice();
+        await runtime.env.voice.requestLeaveVoice(messageGuildId);
         await message.reply("Leaving voice.");
       } else if (message.mentions.has(runtime.env.discord.client.user?.id ?? "")) {
         const text = content.replace(/<@!?\d+>/g, "").trim();
         await runtime.env.memory.saveMessage({
-          ...(message.guildId ? { guildId: message.guildId } : {}),
+          guildId: messageGuildId,
           channelId: message.channelId,
           userId: message.author.id,
           text,

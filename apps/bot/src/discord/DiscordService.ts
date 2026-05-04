@@ -5,33 +5,27 @@ import {
   GatewayIntentBits,
   REST,
   Routes,
-  SlashCommandBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
+  type Interaction,
   type Message,
 } from "discord.js";
 import { createSignal, type Signal } from "@loop-kit/common/Signal";
 import type { Env } from "../Env";
+import { slashCommands } from "./DiscordCommands";
 
 export interface DiscordService {
   readonly client: Client;
   readonly ready: Signal<void>;
   readonly messages: Signal<Message>;
   readonly interactions: Signal<ChatInputCommandInteraction>;
+  readonly buttonInteractions: Signal<ButtonInteraction>;
   readonly login: () => Promise<void>;
   readonly registerSlashCommands: () => Promise<void>;
   readonly sendText: (channelId: string, content: string) => Promise<void>;
   readonly resolveMemberVoiceChannel: (guildId: string, userId: string) => Promise<string | undefined>;
   readonly destroy: () => void;
 }
-
-const slashCommands = [
-  new SlashCommandBuilder().setName("join").setDescription("Join your voice channel"),
-  new SlashCommandBuilder().setName("leave").setDescription("Leave the active voice channel"),
-  new SlashCommandBuilder().setName("say").setDescription("Speak text in voice").addStringOption((option) => option.setName("text").setDescription("Text to speak").setRequired(true)),
-  new SlashCommandBuilder().setName("status").setDescription("Show bot status"),
-  new SlashCommandBuilder().setName("memory-search").setDescription("Search bot memory").addStringOption((option) => option.setName("query").setDescription("Search query").setRequired(true)),
-  new SlashCommandBuilder().setName("youtube").setDescription("Resolve YouTube audio").addStringOption((option) => option.setName("query").setDescription("URL or search query").setRequired(true)),
-].map((command) => command.toJSON());
 
 export const createDiscordService = (env: Env): DiscordService => {
   const client = new Client({
@@ -45,11 +39,13 @@ export const createDiscordService = (env: Env): DiscordService => {
   const ready = createSignal<void>();
   const messages = createSignal<Message>();
   const interactions = createSignal<ChatInputCommandInteraction>();
+  const buttonInteractions = createSignal<ButtonInteraction>();
 
   client.once(Events.ClientReady, () => ready.emit());
   client.on(Events.MessageCreate, (message) => messages.emit(message));
-  client.on(Events.InteractionCreate, (interaction) => {
+  client.on(Events.InteractionCreate, (interaction: Interaction) => {
     if (interaction.isChatInputCommand()) interactions.emit(interaction);
+    if (interaction.isButton()) buttonInteractions.emit(interaction);
   });
 
   return {
@@ -57,6 +53,7 @@ export const createDiscordService = (env: Env): DiscordService => {
     ready,
     messages,
     interactions,
+    buttonInteractions,
     login: async () => {
       await client.login(env.DISCORD_BOT_TOKEN);
     },
@@ -82,4 +79,3 @@ export const createDiscordService = (env: Env): DiscordService => {
     destroy: () => client.destroy(),
   };
 };
-

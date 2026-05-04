@@ -29,6 +29,8 @@ bun run dev
 
 The sidecar receives `DISCORD_BOT_TOKEN` through its environment at startup. IPC is JSON Lines over stdio; sidecar stdout is protocol only and stderr is logs only.
 
+Put `/bin` on path on Windows. Otherwise, you'll have to set up yt-dlp yourself.
+
 ## Scripts
 
 - `bun run dev` starts the Bun bot.
@@ -45,4 +47,3 @@ The sidecar receives `DISCORD_BOT_TOKEN` through its environment at startup. IPC
 - Playback IPC and queueing are implemented; the first pass treats arbitrary TTS bytes as a sidecar playback stream boundary. Exact Discord-ready transcoding remains a focused follow-up if the provider output is not directly accepted by Songbird.
 - Tool calling is registered behind a service interface; deep AI SDK tool execution is intentionally minimal in this pass.
 - Turso memory starts with schema creation, recent search, and FTS-style text search. Vector search is reserved for a later embeddings pass.
-

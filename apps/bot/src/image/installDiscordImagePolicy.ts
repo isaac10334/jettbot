@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, type ButtonInteraction, type ChatInputCommandInteraction, type Message } from "discord.js";
-import { installedAll, installedVoid, type Installer } from "@loop-kit/common/Runtime";
+import { installedVoid, type Installer, type Runtime } from "@loop-kit/common/Runtime";
 import type { AppEnv } from "../app/AppRuntime";
+import { defaultImageSafeSearch } from "./ImageSearchService";
 import type { ImageSearchSession } from "./ImageSearchSessionService";
 
 const commandName = "img";
@@ -57,7 +58,7 @@ const retryText = (retryAfterMs: number | undefined) => {
   return `Slow down. Try again in ${seconds}s.`;
 };
 
-const runSearch = async (runtime: Parameters<Installer<AppEnv>>[0], input: {
+const runSearch = async (runtime: Runtime<AppEnv>, input: {
   readonly query: string;
   readonly userId: string;
   readonly rateLimitKey: string;
@@ -68,10 +69,10 @@ const runSearch = async (runtime: Parameters<Installer<AppEnv>>[0], input: {
   const start = performance.now();
   runtime.env.metrics.increment("image.search.started");
   try {
-    const response = await runtime.env.imageSearch.search({ query: input.query, count: runtime.env.env.JETTBOT_IMAGE_SEARCH_COUNT, safeSearch: "strict" });
+    const response = await runtime.env.imageSearch.search({ query: input.query, count: runtime.env.env.JETTBOT_IMAGE_SEARCH_COUNT, safeSearch: defaultImageSafeSearch });
+    if (response.results.length === 0) throw new Error(`No image results for "${input.query}".`);
     runtime.env.metrics.increment("image.search.completed");
     runtime.env.metrics.recordTiming("image.search.duration_ms", performance.now() - start);
-    if (response.results.length === 0) throw new Error(`No image results for "${input.query}".`);
     return runtime.env.imageSearchSessions.create({ ownerUserId: input.userId, response });
   } catch (error) {
     runtime.env.metrics.increment("image.search.failed");
@@ -80,7 +81,7 @@ const runSearch = async (runtime: Parameters<Installer<AppEnv>>[0], input: {
   }
 };
 
-const handleMessage = async (runtime: Parameters<Installer<AppEnv>>[0], message: Message) => {
+const handleMessage = async (runtime: Runtime<AppEnv>, message: Message) => {
   if (message.author.bot || !message.guildId) return;
   const query = parseMessageQuery(message);
   if (!query) {
@@ -95,7 +96,7 @@ const handleMessage = async (runtime: Parameters<Installer<AppEnv>>[0], message:
   await message.reply(renderSession(session));
 };
 
-const handleCommand = async (runtime: Parameters<Installer<AppEnv>>[0], interaction: ChatInputCommandInteraction) => {
+const handleCommand = async (runtime: Runtime<AppEnv>, interaction: ChatInputCommandInteraction) => {
   if (interaction.commandName !== commandName) return;
   if (!interaction.guildId) {
     await interaction.reply({ content: "Guild-only command.", ...ephemeral });
@@ -112,7 +113,7 @@ const handleCommand = async (runtime: Parameters<Installer<AppEnv>>[0], interact
   await interaction.editReply(renderSession(session));
 };
 
-const handleButton = async (runtime: Parameters<Installer<AppEnv>>[0], interaction: ButtonInteraction) => {
+const handleButton = async (runtime: Runtime<AppEnv>, interaction: ButtonInteraction) => {
   const parsed = parseCustomId(interaction.customId);
   if (!parsed) return;
 
@@ -160,5 +161,9 @@ export const installDiscordImagePolicy: Installer<AppEnv> = (runtime) => {
     });
   });
 
-  return installedAll([installedVoid(unsubscribeMessages), installedVoid(unsubscribeCommands), installedVoid(unsubscribeButtons)]);
+  return installedVoid(() => {
+    unsubscribeMessages();
+    unsubscribeCommands();
+    unsubscribeButtons();
+  });
 };

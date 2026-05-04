@@ -12,6 +12,8 @@ pub enum SidecarError {
     NotJoined,
     #[error("invalid id: {0}")]
     InvalidId(String),
+    #[error("invalid audio format: {0}")]
+    InvalidAudioFormat(String),
     #[error("serenity error: {0}")]
     Serenity(#[from] serenity::Error),
     #[error("songbird join failed")]

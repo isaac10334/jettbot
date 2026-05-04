@@ -33,24 +33,28 @@ Use IRA heavily.
 
 Before major changes, inspect:
 
+- `ai/README.md`
 - `docs/ai/ARCHITECTURE.md`
 - `docs/ai/UI_GUIDE.md`
 - `docs/ai/HANDOFF.md`
 - package scripts in `package.json`
-- existing Jazz schema files
+- existing persistence/schema files, if present
 - existing domain/runtime/bridge folders
 
 If these docs are missing, create lightweight versions instead of guessing.
 
 ## Handoff Policy
 
-When making meaningful changes, update `docs/ai/HANDOFF.md` with:
+At the start of every session, read `docs/ai/HANDOFF.md` before changing code. This is the only canonical handoff file. Do not create or maintain any other `HANDOFF.md` file unless the user explicitly asks for it.
 
-- what changed
-- files touched
-- commands run
-- what passed
-- what failed or was skipped
-- next recommended task
+Use the handoff as external project memory, not as a verbose activity log. Keep it useful for the next agent with:
 
-This is your memory, so use it often, and remember that without it, you will forget everything about this repo. Do not write vague handoffs. Make them useful for the next Codex session. Review it at the start of each session, and update it throughout the session (or at the end). This is a requirement, except in rare cases where your task is extremely small. The structure of the handoff file is completely your choice - base it on whatever you think is most important to remember in the future. Remember, without it, you will not know a single thing!
+- current state and active focus
+- known project truths
+- active risks or blockers
+- next prompt index
+- recent verification summary
+
+Do not maintain exhaustive "Files Touched" or "Commands Run" lists in the handoff. Git is the source of truth for file diffs, and shell history is not reliable shared memory. Summarize meaningful verification instead: what passed, what failed, and what was intentionally skipped.
+
+If you create auxiliary memory, prompt drafts, or planning files, keep the set small and link every one from `docs/ai/HANDOFF.md`. Unlinked agent memory files are considered stale and should be removed or linked.

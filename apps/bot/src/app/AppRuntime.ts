@@ -2,11 +2,13 @@ import { createRuntime, type Runtime } from '@loop-kit/common/Runtime';
 import { installAiResponsePolicy } from '../ai/installAiResponsePolicy';
 import { installDiscordCommands } from '../discord/installDiscordCommands';
 import { installDiscordGateway } from '../discord/installDiscordGateway';
+import { installDiscordImagePolicy } from '../image/installDiscordImagePolicy';
 import { installDiscordMessagePolicy } from '../discord/installDiscordMessagePolicy';
 import { installDiscordVoiceCommandPolicy } from '../discord/installDiscordVoiceCommandPolicy';
 import type { Env } from '../Env';
 import { installMemoryEffects } from '../memory/installMemoryEffects';
 import { installObservability } from '../observability/installObservability';
+import { installRealtimeDebugBridge } from '../observability/installRealtimeDebugBridge';
 import { installRustSidecarBridge } from '../sidecar/installRustSidecarBridge';
 import { installTranscriptionPipeline } from '../transcription/installTranscriptionPipeline';
 import { installTtsPlaybackPipeline } from '../tts/installTtsPlaybackPipeline';
@@ -33,6 +35,7 @@ export const createAppRuntime = (env: Env): AppRuntime => {
                 installShutdownHandlers,
                 installMemoryEffects,
                 installRustSidecarBridge,
+                installRealtimeDebugBridge,
                 installDiscordGateway,
                 installDiscordCommands,
                 installVoiceSessionPolicy,
@@ -40,6 +43,7 @@ export const createAppRuntime = (env: Env): AppRuntime => {
                 installAiResponsePolicy,
                 installTtsPlaybackPipeline,
                 installDiscordVoiceCommandPolicy,
+                installDiscordImagePolicy,
                 installDiscordMessagePolicy,
             ]);
         },

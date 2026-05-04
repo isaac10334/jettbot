@@ -21,13 +21,26 @@ export const createTursoMemoryService = (env: Env): MemoryService => {
     await client.batch(
       [
         "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, channel_id TEXT, user_id TEXT, text TEXT NOT NULL, created_at INTEGER NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS transcript_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, start_ms INTEGER, end_ms INTEGER, is_final INTEGER NOT NULL, received_at INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS transcript_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, session_id TEXT NOT NULL, user_id TEXT NOT NULL, text TEXT NOT NULL, start_ms INTEGER, end_ms INTEGER, is_final INTEGER NOT NULL, received_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id INTEGER, model TEXT, vector BLOB)",
-        "CREATE TABLE IF NOT EXISTS tool_events (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT, created_at INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS tool_events (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, channel_id TEXT, session_id TEXT, tool_name TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT, created_at INTEGER NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_scope_time ON messages (guild_id, channel_id, user_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_transcript_turns_scope_time ON transcript_turns (guild_id, channel_id, session_id, user_id, received_at)",
+        "CREATE INDEX IF NOT EXISTS idx_tool_events_scope_time ON tool_events (guild_id, channel_id, session_id, created_at)",
       ],
       "write",
     );
+    for (const sql of [
+      "ALTER TABLE transcript_turns ADD COLUMN guild_id TEXT",
+      "ALTER TABLE transcript_turns ADD COLUMN channel_id TEXT",
+      "ALTER TABLE transcript_turns ADD COLUMN session_id TEXT",
+      "ALTER TABLE tool_events ADD COLUMN guild_id TEXT",
+      "ALTER TABLE tool_events ADD COLUMN channel_id TEXT",
+      "ALTER TABLE tool_events ADD COLUMN session_id TEXT",
+    ]) {
+      await client.execute(sql).catch(() => undefined);
+    }
   };
 
   return {
@@ -40,21 +53,21 @@ export const createTursoMemoryService = (env: Env): MemoryService => {
     },
     saveTranscriptTurn: async (turn: TranscriptTurn) => {
       await client.execute({
-        sql: "INSERT INTO transcript_turns (user_id, text, start_ms, end_ms, is_final, received_at) VALUES (?, ?, ?, ?, ?, ?)",
-        args: [turn.userId, turn.text, turn.startMs ?? null, turn.endMs ?? null, turn.isFinal ? 1 : 0, turn.receivedAt],
+        sql: "INSERT INTO transcript_turns (guild_id, channel_id, session_id, user_id, text, start_ms, end_ms, is_final, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        args: [turn.guildId, turn.channelId, turn.sessionId, turn.userId, turn.text, turn.startMs ?? null, turn.endMs ?? null, turn.isFinal ? 1 : 0, turn.receivedAt],
       });
     },
     search: async (query, options) => {
       const result = await client.execute({
-        sql: "SELECT guild_id, channel_id, user_id, text, created_at FROM messages WHERE text LIKE ? ORDER BY created_at DESC LIMIT ?",
-        args: [`%${query}%`, options?.limit ?? 10],
+        sql: "SELECT guild_id, channel_id, user_id, text, created_at FROM messages WHERE text LIKE ? ORDER BY CASE WHEN ? IS NOT NULL AND guild_id = ? THEN 0 ELSE 1 END, created_at DESC LIMIT ?",
+        args: [`%${query}%`, options?.guildId ?? null, options?.guildId ?? null, options?.limit ?? 10],
       });
       return result.rows.map((row) => rowToMessage(row));
     },
     semanticSearch: async (query, options) => {
       const result = await client.execute({
-        sql: "SELECT guild_id, channel_id, user_id, text, created_at FROM messages WHERE text LIKE ? ORDER BY created_at DESC LIMIT ?",
-        args: [`%${query}%`, options?.limit ?? 10],
+        sql: "SELECT guild_id, channel_id, user_id, text, created_at FROM messages WHERE text LIKE ? ORDER BY CASE WHEN ? IS NOT NULL AND guild_id = ? THEN 0 ELSE 1 END, created_at DESC LIMIT ?",
+        args: [`%${query}%`, options?.guildId ?? null, options?.guildId ?? null, options?.limit ?? 10],
       });
       return result.rows.map((row) => rowToMessage(row));
     },

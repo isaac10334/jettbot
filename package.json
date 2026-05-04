@@ -11,6 +11,7 @@
     "build": "bun run typecheck",
     "sidecar:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sidecar.ps1 build",
     "sidecar:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sidecar.ps1 run",
+    "discord:commands:refresh": "bun run scripts/refresh-discord-commands.ts",
     "test": "bun test",
     "check": "bun run typecheck && bun test && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sidecar.ps1 test"
   },
@@ -19,10 +20,11 @@
     "@loop-kit/common": "^0.1.2",
     "ai": "^6.0.168",
     "@ai-sdk/gateway": "^3.0.104",
-    "discord.js": "^14.23.2"
+    "discord.js": "^14.23.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.0",
+    "@types/bun": "^1.3.13",
     "typescript": "^5.9.3"
   }
 }

@@ -1,5 +1,7 @@
 import { createSignal, type Signal } from "@loop-kit/common/Signal";
 import type { Console } from "@loop-kit/common/Console";
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { encodeJsonLine, readJsonLines } from "../__internal/JsonLineProtocol";
 import type { Env } from "../Env";
 import type { MetricsService } from "../observability/MetricsService";
@@ -23,6 +25,15 @@ interface PendingCall {
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
   readonly timer: Timer;
+}
+
+type SidecarConsoleLevel = Env["JETTBOT_SIDECAR_CONSOLE_LEVEL"];
+type SidecarLogLevel = Exclude<SidecarConsoleLevel, "off">;
+
+interface SidecarLogWriter {
+  readonly writeLine: (line: string) => void;
+  readonly flush: () => Promise<void>;
+  readonly dispose: () => Promise<void>;
 }
 
 const randomId = (): string => crypto.randomUUID();
@@ -63,6 +74,77 @@ const readTextLines = async (
   }
 };
 
+const levelRank: Record<SidecarLogLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+const parseSidecarLogLevel = (line: string): SidecarLogLevel => {
+  const match = line.match(/\b(DEBUG|INFO|WARN|ERROR)\b/);
+  if (match?.[1] === "DEBUG") return "debug";
+  if (match?.[1] === "INFO") return "info";
+  if (match?.[1] === "WARN") return "warn";
+  if (match?.[1] === "ERROR") return "error";
+  return "info";
+};
+
+const shouldPromoteSidecarLine = (line: string, threshold: SidecarConsoleLevel): boolean => {
+  if (threshold === "off") return false;
+  return levelRank[parseSidecarLogLevel(line)] >= levelRank[threshold];
+};
+
+const writeSidecarConsoleLine = (console: Console | undefined, line: string): void => {
+  const level = parseSidecarLogLevel(line);
+  if (level === "error") {
+    console?.error(line);
+    return;
+  }
+  if (level === "warn") {
+    console?.warn(line);
+    return;
+  }
+  if (level === "info") {
+    console?.info(line);
+    return;
+  }
+  console?.debug(line);
+};
+
+const createSidecarLogWriter = (path: string, flushIntervalMs: number): SidecarLogWriter => {
+  let pending = "";
+  let flushing: Promise<void> | undefined;
+  const timer = setInterval(() => {
+    void flush();
+  }, flushIntervalMs);
+
+  const flush = async (): Promise<void> => {
+    if (pending === "") return flushing;
+    if (flushing) return flushing;
+    const chunk = pending;
+    pending = "";
+    flushing = (async () => {
+      await mkdir(dirname(path), { recursive: true });
+      await appendFile(path, chunk, "utf8");
+    })().finally(() => {
+      flushing = undefined;
+    });
+    return flushing;
+  };
+
+  return {
+    writeLine: (line: string) => {
+      pending += `${line}\n`;
+    },
+    flush,
+    dispose: async () => {
+      clearInterval(timer);
+      await flush();
+    },
+  };
+};
+
 export const createRustSidecarService = (
   env: Env,
   observability?: { readonly console: Console; readonly metrics: MetricsService },
@@ -74,6 +156,10 @@ export const createRustSidecarService = (
   const abortController = new AbortController();
   const console = observability?.console.child("sidecar");
   const metrics = observability?.metrics;
+  const sidecarLog = createSidecarLogWriter(
+    env.JETTBOT_SIDECAR_LOG_FILE_PATH,
+    env.JETTBOT_OBSERVABILITY_FLUSH_INTERVAL_MS,
+  );
 
   const write = async (command: SidecarCommand): Promise<void> => {
     if (sink == null) throw new Error("Rust sidecar is not running");
@@ -104,7 +190,7 @@ export const createRustSidecarService = (
       env: {
         ...Bun.env,
         DISCORD_BOT_TOKEN: env.DISCORD_BOT_TOKEN,
-        RUST_LOG: env.JETTBOT_LOG_LEVEL,
+        RUST_LOG: env.JETTBOT_SIDECAR_RUST_LOG,
       },
       onExit: (_subprocess, exitCode, signalCode) => {
         const error = new Error(`Rust sidecar exited: code=${exitCode} signal=${signalCode ?? ""}`);
@@ -125,7 +211,12 @@ export const createRustSidecarService = (
     );
     void readTextLines(
       subprocess.stderr,
-      (line) => console?.debug(line),
+      (line) => {
+        sidecarLog.writeLine(line);
+        if (shouldPromoteSidecarLine(line, env.JETTBOT_SIDECAR_CONSOLE_LEVEL)) {
+          writeSidecarConsoleLine(console, line);
+        }
+      },
       (error) => events.emit({ type: "Error", code: "SidecarStderrError", message: error.message }),
       abortController.signal,
     );
@@ -167,6 +258,7 @@ export const createRustSidecarService = (
     abortController.abort();
     sink?.end();
     await process.exited.catch(() => 1);
+    await sidecarLog.dispose();
     process = undefined;
     sink = undefined;
   };
