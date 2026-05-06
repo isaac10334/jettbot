@@ -2,9 +2,9 @@
 
 Read `docs/ai/HANDOFF.md` first.
 
-## Readiness
+## Status
 
-Ready now. This is the next focused audio prompt before broader voice observability or dashboard work.
+Archived. The audio sidecar reliability work this prompt described has already been folded into the current voice/audio implementation. Use active voice prompts for new work.
 
 ## Desired Outcome
 

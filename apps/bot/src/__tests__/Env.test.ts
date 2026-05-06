@@ -25,6 +25,13 @@ describe("Env", () => {
     expect(result.env?.JETTBOT_SIDECAR_RUST_LOG).toBe("warn,jettbot_voice_sidecar=info");
     expect(result.env?.JETTBOT_REALTIME_DEBUG_ENABLED).toBe(true);
     expect(result.env?.JETTBOT_REALTIME_DEBUG_DIR).toBe("./logs/realtime");
+    expect(result.env?.ADMIN_USER_ID).toBeUndefined();
+  });
+
+  test("parses optional admin user id", () => {
+    const result = parseEnv({ ...required, ADMIN_USER_ID: "377268939035639810" });
+    expect(result.ok).toBe(true);
+    expect(result.env?.ADMIN_USER_ID).toBe("377268939035639810");
   });
 
   test("reports missing required vars", () => {

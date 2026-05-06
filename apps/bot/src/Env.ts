@@ -25,6 +25,7 @@ export interface Env {
   readonly AI_GATEWAY_API_KEY: string;
   readonly AI_GATEWAY_MODEL: string;
   readonly BRAVE_SEARCH_API_KEY: string;
+  readonly ADMIN_USER_ID?: string;
   readonly JETTBOT_IMAGE_SEARCH_COUNT: number;
   readonly JETTBOT_IMAGE_SEARCH_RATE_LIMIT_COUNT: number;
   readonly JETTBOT_IMAGE_SEARCH_RATE_LIMIT_WINDOW_MS: number;
@@ -118,6 +119,7 @@ export const parseEnv = (source: EnvSource = Bun.env): EnvParseResult => {
   if (ipcMode !== "stdio") errors.push("JETTBOT_IPC_MODE must be stdio");
 
   const discordGuildId = optional(source, "DISCORD_GUILD_ID");
+  const adminUserId = optional(source, "ADMIN_USER_ID");
   const tursoDatabaseUrl = optional(source, "TURSO_DATABASE_URL");
   const tursoAuthToken = optional(source, "TURSO_AUTH_TOKEN");
   const youtubeCookiesPath = optional(source, "YOUTUBE_COOKIES_PATH");
@@ -149,6 +151,7 @@ export const parseEnv = (source: EnvSource = Bun.env): EnvParseResult => {
     AI_GATEWAY_API_KEY: need("AI_GATEWAY_API_KEY"),
     AI_GATEWAY_MODEL: optional(source, "AI_GATEWAY_MODEL") ?? "openai/gpt-5.4",
     BRAVE_SEARCH_API_KEY: need("BRAVE_SEARCH_API_KEY"),
+    ...(adminUserId ? { ADMIN_USER_ID: adminUserId } : {}),
     JETTBOT_IMAGE_SEARCH_COUNT: Math.min(imageSearchCount, 200),
     JETTBOT_IMAGE_SEARCH_RATE_LIMIT_COUNT: imageSearchRateLimitCount,
     JETTBOT_IMAGE_SEARCH_RATE_LIMIT_WINDOW_MS: imageSearchRateLimitWindowMs,

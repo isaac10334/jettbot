@@ -33,10 +33,8 @@ Use IRA heavily.
 
 Before major changes, inspect:
 
-- `ai/README.md`
-- `docs/ai/ARCHITECTURE.md`
-- `docs/ai/UI_GUIDE.md`
 - `docs/ai/HANDOFF.md`
+- `docs/ai/ARCHITECTURE.md`
 - package scripts in `package.json`
 - existing persistence/schema files, if present
 - existing domain/runtime/bridge folders

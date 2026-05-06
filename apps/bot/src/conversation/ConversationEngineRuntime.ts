@@ -69,9 +69,11 @@ export interface ConversationEngineRuntime {
   readonly interruptSelf: (guildId: string) => void;
 }
 
-const directAddressPattern = /\b(jettbot|jetbot|jett bot|jet bot|jetpack|jet pack)\b/i;
+const directAddressPattern = /\b(jettbot|jetbot|jett bot|jet bot|jetpack|jet pack|jebba|jepa|jep[a-z]*|j[\s-]?pod)\b/i;
+const highConfidenceInvitePattern = /\b(are you here|can you talk|should be able to talk|you there|say something|talk now)\b/i;
 const stopPattern = /\b(stop|cancel|shut up|quiet|be quiet|hold on)\b/i;
 const multiSpeakerWaitWindowMs = 900;
+const recentAddressWindowMs = 6_000;
 
 const turnId = (turn: TranscriptTurn): string =>
   `${turn.sessionId}:${turn.userId}:${turn.receivedAt}:${turn.startMs ?? 0}:${turn.endMs ?? 0}`;
@@ -153,21 +155,23 @@ export const createConversationEngineRuntime = (): ConversationEngineRuntime => 
 
       const guild = getGuildState(state.get(), turn.guildId);
       const addressed = directAddressPattern.test(turn.text);
+      const recentlyAddressed = recent.some((item) => directAddressPattern.test(item.text) && turn.receivedAt - item.receivedAt <= recentAddressWindowMs);
+      const invited = highConfidenceInvitePattern.test(turn.text) && recentlyAddressed;
       const stopRequested = stopPattern.test(turn.text);
 
       if (stopRequested && (guild.botSpeechStatus === "speaking" || guild.botSpeechStatus === "queued")) {
         return publish(makeDecision(turn, "interruptSelf", "user requested stop while Jettbot speech was active", startedAt));
       }
-      if (recentDifferentSpeaker && !addressed) {
+      if (recentDifferentSpeaker && !addressed && !invited) {
         return publish(makeDecision(turn, "wait", "multiple known speakers are active in a short window", startedAt));
       }
-      if (!addressed) {
+      if (!addressed && !invited) {
         return publish(makeDecision(turn, "ignore", "Jettbot was not directly addressed", startedAt));
       }
       if (guild.botSpeechStatus === "speaking" || guild.botSpeechStatus === "queued") {
         return publish(makeDecision(turn, "queueSpeech", "Jettbot is already speaking or queued", startedAt));
       }
-      return publish(makeDecision(turn, "speak", "Jettbot was directly addressed", startedAt));
+      return publish(makeDecision(turn, "speak", addressed ? "Jettbot was directly addressed" : "Jettbot was clearly invited after a recent address", startedAt));
     },
     ingestPlaybackEvent: (event) => {
       if ((event.type === "PlaybackFinished" || event.type === "PlaybackDebug") && "guild_id" in event && event.guild_id) {

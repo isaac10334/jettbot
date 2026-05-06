@@ -12,6 +12,11 @@ export const installConversationEngineRuntime: Installer<AppEnv> = (runtime) => 
   });
 
   const unsubscribeTranscript = runtime.env.signals.conversationTurnReady.subscribe((turn) => {
+    if (!turn.userId.startsWith("unknown_ssrc:")) {
+      void runtime.env.memory.saveTranscriptTurn(turn).catch((error) => {
+        runtime.env.console.warn("memory.voice_turn_save_failed", { error });
+      });
+    }
     const decision = runtime.env.conversationEngine.ingestTranscriptTurn(turn);
     runtime.env.realtimeDebug.writeJsonLine("text/conversation-engine.jsonl", {
       type: "conversation.decision",

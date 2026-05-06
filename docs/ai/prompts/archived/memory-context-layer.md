@@ -6,7 +6,7 @@ Read `docs/ai/HANDOFF.md` first.
 
 Retired. Do not run this as the next implementation prompt.
 
-The useful intent from this draft has been folded into [Memory database foundation](memory-database-foundation.md). Follow that prompt instead because the current direction is durable observation logging first, with Discord fetch used only for bounded invocation context, startup/reconnect backfill, missed-gap repair, and explicit read-this-channel/thread commands.
+The useful intent from this draft has been folded into [Memory database foundation](../memory-database-foundation.md). Follow that prompt instead. Current behavior uses durable channel caching with bounded first-seen prelude and capped gap repair; it does not fetch Discord history for every response.
 
 ## Preserved Intent
 

@@ -133,7 +133,7 @@ describe("offline voice pipeline", () => {
 
     await waitFor(() => playbackCalls.length === 1);
 
-    expect(savedTranscriptTurns).toEqual([turn]);
+    expect(savedTranscriptTurns).toEqual([]);
     expect(conversationInputs).toEqual([turn]);
     expect(debugLines.some((line) => line.path === "text/llm-messages.jsonl" && line.value.type === "request")).toBe(true);
     expect(debugLines.some((line) => line.path === "text/llm-partial-responses.jsonl" && line.value.type === "partial")).toBe(true);

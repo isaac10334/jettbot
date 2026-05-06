@@ -1,10 +1,12 @@
 import { installedVoid, type Installer } from "@loop-kit/common/Runtime";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, type ButtonInteraction } from "discord.js";
 import type { AppEnv } from "../app/AppRuntime";
+import type { MemoryKind, MemoryItem, MemoryMessage } from "../memory/MemoryService";
 import type { YoutubeGuildPlaybackState } from "../youtube/YoutubePlaybackService";
 
 const ephemeral = { flags: MessageFlags.Ephemeral } as const;
-const handledCommands = new Set(["join", "leave", "say", "status", "stop", "memory-search", "youtube"]);
+const handledCommands = new Set(["join", "leave", "say", "status", "stop", "memory-search", "memory", "personality", "youtube"]);
+const adminOnlyCommands = new Set(["memory-search", "memory", "personality"]);
 const youtubeUiPrefix = "yt";
 
 const youtubeCustomId = (action: "skip" | "stop") => `${youtubeUiPrefix}:${action}`;
@@ -15,6 +17,19 @@ const parseYoutubeCustomId = (value: string): "skip" | "stop" | undefined => {
   if (action === "skip" || action === "stop") return action;
   return undefined;
 };
+
+export const isAdminUser = (adminUserId: string | undefined, userId: string): boolean => adminUserId != null && adminUserId === userId;
+
+const requireAdmin = async (runtime: { env: AppEnv }, interaction: { readonly user: { readonly id: string }; reply: (input: any) => Promise<unknown> }): Promise<boolean> => {
+  if (isAdminUser(runtime.env.env.ADMIN_USER_ID, interaction.user.id)) return true;
+  await interaction.reply({ content: "Admin-only command.", ...ephemeral });
+  return false;
+};
+
+const renderMemoryItems = (rows: readonly MemoryItem[]): string =>
+  rows.map((row) => `[${row.kind}] ${row.text}`).join("\n").slice(0, 1900) || "No results.";
+
+const renderMessages = (rows: readonly MemoryMessage[]): string => rows.map((row) => row.text).join("\n").slice(0, 1900) || "No results.";
 
 const formatDuration = (seconds: number | undefined): string => {
   if (seconds == null || !Number.isFinite(seconds)) return "unknown";
@@ -120,6 +135,7 @@ export const installDiscordVoiceCommandPolicy: Installer<AppEnv> = (runtime) => 
       let failed = false;
       runtime.env.metrics.increment(`discord.command.${interaction.commandName}.started`);
       try {
+        if (adminOnlyCommands.has(interaction.commandName) && !(await requireAdmin(runtime, interaction))) return;
         if (!interaction.guildId) {
           await interaction.reply({ content: "Guild-only command.", ...ephemeral });
           return;
@@ -155,7 +171,58 @@ export const installDiscordVoiceCommandPolicy: Installer<AppEnv> = (runtime) => 
         if (interaction.commandName === "memory-search") {
           const query = interaction.options.getString("query", true);
           const rows = await runtime.env.memory.search(query, { limit: 5, guildId: interaction.guildId });
-          await interaction.reply({ content: rows.map((row) => row.text).join("\n") || "No results.", ...ephemeral });
+          await interaction.reply({ content: renderMessages(rows), ...ephemeral });
+        }
+        if (interaction.commandName === "memory") {
+          const subcommand = interaction.options.getSubcommand(true);
+          if (subcommand === "add") {
+            const kind = interaction.options.getString("kind", true) as MemoryKind;
+            const text = interaction.options.getString("text", true);
+            const importance = interaction.options.getInteger("importance") ?? 3;
+            const item = await runtime.env.memory.addMemory({
+              kind,
+              guildId: interaction.guildId,
+              channelId: interaction.channelId,
+              userId: interaction.user.id,
+              text,
+              importance,
+            });
+            await interaction.reply({ content: `Added ${item.kind} memory: ${item.text}`, ...ephemeral });
+          }
+          if (subcommand === "search") {
+            const query = interaction.options.getString("query", true);
+            const rows = await runtime.env.memory.searchMemoryItems(query, { limit: 8, guildId: interaction.guildId });
+            await interaction.reply({ content: renderMemoryItems(rows), ...ephemeral });
+          }
+          if (subcommand === "recent") {
+            const user = interaction.options.getUser("user");
+            const rows = await runtime.env.memory.recentMemoryItems({
+              limit: 8,
+              guildId: interaction.guildId,
+              ...(user ? { userId: user.id } : {}),
+            });
+            await interaction.reply({ content: renderMemoryItems(rows), ...ephemeral });
+          }
+        }
+        if (interaction.commandName === "personality") {
+          const subcommand = interaction.options.getSubcommand(true);
+          if (subcommand === "get") {
+            const profile = await runtime.env.personality.getActiveProfile({ guildId: interaction.guildId });
+            await interaction.reply({ content: `${profile.name}: ${profile.summary}`, ...ephemeral });
+          }
+          if (subcommand === "list") {
+            await interaction.reply({
+              content: runtime.env.personality.listProfiles().map((profile) => `${profile.id}: ${profile.summary}`).join("\n"),
+              ...ephemeral,
+            });
+          }
+          if (subcommand === "set") {
+            const profileId = interaction.options.getString("profile", true);
+            if (!runtime.env.personality.isProfileId(profileId)) throw new Error("Unknown personality profile.");
+            await runtime.env.personality.setActiveProfile(profileId, { guildId: interaction.guildId });
+            const profile = await runtime.env.personality.getActiveProfile({ guildId: interaction.guildId });
+            await interaction.reply({ content: `Personality set to ${profile.name}.`, ...ephemeral });
+          }
         }
         if (interaction.commandName === "youtube") {
           const query = interaction.options.getString("query", true);
@@ -248,4 +315,5 @@ const handleYoutubeButton = async (runtime: { env: AppEnv }, interaction: Button
 export const __discordVoiceCommandPolicyTestUtils = {
   parseYoutubeCustomId,
   handleYoutubeButton,
+  isAdminUser,
 };

@@ -2,9 +2,9 @@
 
 Read `docs/ai/HANDOFF.md` first.
 
-## Readiness
+## Status
 
-Ready after the audio sidecar common failure prompt, or earlier if broader voice observability is explicitly requested.
+Archived. The core observability/testing work is implemented through realtime debug capture, voice analyzers, focused tests, and sidecar diagnostics. Use `../live-voice-test.md` or `../voice-conversation-engine-latency.md` for active voice work.
 
 ## Desired Outcome
 

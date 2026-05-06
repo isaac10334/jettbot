@@ -9,7 +9,6 @@ export const installAiResponsePolicy: Installer<AppEnv> = (runtime) => {
                 const turn = decision.turn;
                 if (!turn) return;
                 runtime.env.conversationEngine.markThinking(decision.guildId);
-                await runtime.env.memory.saveTranscriptTurn(turn);
                 const messages =
                     await runtime.env.conversation.buildMessages(turn);
                 const responseId = crypto.randomUUID();

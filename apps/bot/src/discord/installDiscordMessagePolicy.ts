@@ -1,12 +1,17 @@
 import { installedVoid, type Installer } from "@loop-kit/common/Runtime";
 import type { AppEnv } from "../app/AppRuntime";
+import { cacheDiscordMessageWithBoundedBackfill } from "./DiscordChannelMemory";
 
 export const installDiscordMessagePolicy: Installer<AppEnv> = (runtime) => {
   const unsubscribe = runtime.env.discord.messages.subscribe((message) => {
-    if (message.author.bot || !message.guildId) return;
+    if (!message.guildId) return;
+    const botUserId = runtime.env.discord.client.user?.id;
+    if (message.author.bot && message.author.id !== botUserId) return;
     const messageGuildId = message.guildId;
     const content = message.content.trim();
     void (async () => {
+      await cacheDiscordMessageWithBoundedBackfill(runtime, message);
+      if (message.author.bot) return;
       if (/^jett\s+join$/i.test(content)) {
         const guildId = message.guildId;
         if (!guildId) return;
@@ -22,19 +27,14 @@ export const installDiscordMessagePolicy: Installer<AppEnv> = (runtime) => {
         await message.reply("Leaving voice.");
       } else if (message.mentions.has(runtime.env.discord.client.user?.id ?? "")) {
         const text = content.replace(/<@!?\d+>/g, "").trim();
-        await runtime.env.memory.saveMessage({
-          guildId: messageGuildId,
-          channelId: message.channelId,
-          userId: message.author.id,
-          text,
-          createdAt: Date.now(),
-        });
         const response = await runtime.env.ai.streamResponse({
           userId: message.author.id,
-          messages: [
-            { role: "system", content: "You are Jettbot, a concise Discord assistant." },
-            { role: "user", content: text },
-          ],
+          messages: await runtime.env.conversation.buildTextMessages({
+            guildId: messageGuildId,
+            channelId: message.channelId,
+            userId: message.author.id,
+            text,
+          }),
         });
         let reply = "";
         for await (const token of response.text) reply += token;

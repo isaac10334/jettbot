@@ -2,9 +2,9 @@
 
 Read `docs/ai/HANDOFF.md` first.
 
-## Readiness
+## Status
 
-Ready after the YouTube WAV playback fix. The playback foundation works through `yt-dlp` search/URL resolve, FFmpeg WAV preparation, sidecar `PlayAudioFile`, and Songbird WAV/PCM decode.
+Archived. The queue UI and reliable WAV playback path are implemented. Use `../on-hold/youtube-loading-latency-streaming.md` only if YouTube startup latency becomes important again.
 
 ## Desired Outcome
 

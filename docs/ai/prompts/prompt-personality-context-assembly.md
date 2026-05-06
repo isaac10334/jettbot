@@ -2,37 +2,33 @@
 
 Read `docs/ai/HANDOFF.md` first.
 
-## Readiness
+## Status
 
-Run fourth, after the memory/database foundation has a usable first slice.
+Active, partially implemented.
 
-## Desired Outcome
+## Current State
 
-Centralize Jettbot's personality and prompt/context assembly so text and voice responses use one shared brain instead of scattered hardcoded strings. Make sure that Jettbot is funny and even edgy, roleplaying and even simulating emotions like anger.
+- Text mentions and voice predicted-turn generation now share `ConversationService`.
+- Shared prompt context includes active personality, scoped memory, recent cached channel messages for text, stitched transcript context for voice, and `self_state`.
+- `PersonalityService` owns selectable profiles.
+- Current default profile is `unhinged_gremlin`; selectable profiles also include `dry_menace`, `edgy_roaster`, and `chaotic_character`.
+- `/personality` and `/memory` are admin-only through `ADMIN_USER_ID`.
 
-## Context
+## Next Work
 
-Jettbot currently has personality and memory context embedded in narrow response paths. Future behavior needs one explicit assembly path that can combine personality, scoped preferences, retrieved memories, runtime awareness, and active warnings for both Discord text and voice.
+- Improve profile quality and add a clear admin workflow for editing or previewing profile prompts.
+- Add precedence tests for guild/user profile overrides if scoped personalities are expanded.
+- Add active runtime warnings and transcription hints to prompt context once AwarenessRuntime exists.
+- Tighten voice prompt behavior so Jettbot speaks less often but with stronger character when he does speak.
 
-## Implementation Direction
+## Guardrails
 
-- Add or design a `PersonalityService` that owns the active personality profile and any scoped user/guild preferences that affect tone or behavior.
-- Add an explicit prompt/context assembly service or domain boundary used by both text mentions and voice response generation.
-- Assemble context packets from:
-  - active personality/profile
-  - scoped user/guild preferences
-  - relevant retrieved episodes, semantic memories, and procedural memories
-  - current awareness snapshot
-  - active runtime warnings or recent failures
-  - transcription hints relevant to the current users/channel/session
-- Keep prompt assembly deterministic and testable. Policies should request assembled context rather than constructing prompts inline.
-- Do not add Live/UseGPU as the first implementation. Live may be a future fit for reactive prompt assembly, but the immediate architecture should use IRA services, runtimes, policies, and explicit context packets.
-- Preserve concise Discord voice behavior: responses should remain suitable for TTS unless the active context requests otherwise.
+- Keep business logic out of Discord handlers. Policies should ask services for assembled context.
+- Keep voice responses concise enough for TTS unless explicitly requested otherwise.
+- Edgy personalities may roast and use profanity, but must not use slurs, protected-class harassment, threats, doxxing, or targeted real-world harm.
 
 ## Acceptance Checks
 
-- Hardcoded personality/system prompt fragments are centralized or routed through a clear assembly interface.
-- Text and voice paths can share the same prompt/personality/context assembly surface.
-- Tests cover assembly precedence and inclusion/exclusion of memory, preferences, warnings, and awareness snapshots.
-- No source path fetches Discord history directly just to assemble every prompt; it should use the memory/database and bounded fetch rules from the memory prompt.
-- Typecheck and focused tests pass.
+- Prompt assembly tests cover personality, memory, channel context, voice transcript context, and exclusions.
+- Text and voice paths continue sharing the same assembly surface.
+- `bun run typecheck` and focused tests pass.

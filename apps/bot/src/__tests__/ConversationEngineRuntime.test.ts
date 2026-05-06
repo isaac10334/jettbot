@@ -28,6 +28,24 @@ describe("ConversationEngineRuntime", () => {
     expect(decisions).toHaveLength(1);
   });
 
+  test("recognizes observed voice aliases from the 1:02 AM session", () => {
+    const engine = createConversationEngineRuntime();
+
+    expect(engine.ingestTranscriptTurn(turn({ text: "Jebba, are you here?" })).kind).toBe("speak");
+    expect(engine.ingestTranscriptTurn(turn({ text: "Jepa? Hello, Jepa.", receivedAt: 2_000 })).kind).toBe("speak");
+    expect(engine.ingestTranscriptTurn(turn({ text: "So, J-Pod, are you here?", receivedAt: 3_000 })).kind).toBe("speak");
+  });
+
+  test("speaks for a high-confidence invitation after a recent alias", () => {
+    const engine = createConversationEngineRuntime();
+
+    engine.ingestTranscriptTurn(turn({ userId: "user-a", text: "So, J-Pod, are you here?", receivedAt: 1_000 }));
+    engine.ingestTranscriptTurn(turn({ userId: "user-b", text: "random crosstalk", receivedAt: 1_400 }));
+    const decision = engine.ingestTranscriptTurn(turn({ userId: "user-a", text: "He should be able to talk now.", receivedAt: 1_800 }));
+
+    expect(decision.kind).toBe("speak");
+  });
+
   test("keeps unknown SSRC transcript decisions diagnostic-only", () => {
     const engine = createConversationEngineRuntime();
 

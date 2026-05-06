@@ -61,6 +61,22 @@ describe("TursoMemoryService", () => {
     memory.close();
   });
 
+  test("stores layered memory items and persisted personality settings", async () => {
+    const memory = createTursoMemoryService(createTestEnv(":memory:"));
+    await memory.initialize();
+    await memory.addMemory({ kind: "semantic", guildId: "guild-a", text: "Isaac likes unhinged dry jokes.", importance: 5 });
+    await memory.addMemory({ kind: "procedural", guildId: "guild-a", text: "When Isaac asks for commands, give the copy-paste block first.", importance: 4 });
+    await memory.setSelfState("runtime", "runtime", { voice: "connected" }, { guildId: "guild-a" });
+    await memory.setPersonalityProfile("dry_menace", { guildId: "guild-a" });
+
+    const rows = await memory.searchMemoryItems("Isaac", { guildId: "guild-a", limit: 5 });
+
+    expect(rows.map((row) => row.kind)).toEqual(["semantic", "procedural"]);
+    expect(await memory.getSelfState("runtime")).toEqual({ voice: "connected" });
+    expect(await memory.getPersonalityProfile({ guildId: "guild-a" })).toBe("dry_menace");
+    memory.close();
+  });
+
   test("migrates pre-multi-guild tables before creating scoped indexes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "jettbot-memory-test-"));
     const databaseUrl = `file:${join(directory, "memory.db").replaceAll("\\", "/")}`;

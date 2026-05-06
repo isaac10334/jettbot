@@ -2,46 +2,42 @@
 
 Read `docs/ai/HANDOFF.md` first.
 
-## Readiness
+## Status
 
-Run third, after YouTube playback and voice observability/testing.
+Active, partially implemented. This prompt is no longer blocked by YouTube playback.
 
-## Desired Outcome
+## Current State
 
-Design and implement the first serious database foundation for Jettbot's shared brain without overbuilding a generic RAG platform.
+- Jettbot uses Turso/libSQL through `@libsql/client`, with Drizzle schema/migration files checked in.
+- Runtime initialization still defensively creates/repairs tables so local file-backed libSQL and Turso both work.
+- Implemented layers:
+  - `raw_observations`
+  - `episodes`
+  - `semantic_memories`
+  - `procedural_memories`
+  - `self_state`
+  - `personality_settings`
+  - legacy-compatible `messages`, `transcript_turns`, and `tool_events`
+- Text-channel memory now stores Discord message snowflakes, author labels, content, timestamps, and raw observation entries.
+- For each channel, first sight fetches 10 messages before the triggering message; later gaps are filled up to 100 messages after the last cached snowflake. Do not crawl entire old channels.
 
-## Architecture Direction
+## Next Work
 
-Use layered memory:
+- Live-verify Turso in a real bot session with `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`.
+- Add explicit message edit/delete observations and update the prompt context behavior for edited/deleted cached messages.
+- Add focused admin/read commands for inspecting channel cursors and recent cached channel context.
+- Start episode generation only after raw observations and channel context are proven in live use.
+- Keep retrieval pragmatic: scoped SQL filters and TypeScript reranking before vectors or lexical search.
 
-- Raw observation log: immutable-ish event facts for Discord messages, edits, deletes, voice events, tool calls, bot responses, errors, and runtime/provider events.
-- Episodes: summaries of bounded events or sessions with time range, scope, participants, tags, source observation IDs, confidence, and importance.
-- Semantic memories: facts, preferences, relationships, and project knowledge that are true now but may decay, expire, be superseded, or become "used to be true"; every item needs confidence/provenance.
-- Procedural memories: rules, skills, and policies such as "when Isaac asks for CS2 commands, provide one copy-paste block first."
-- Self-state/body schema: current runtime awareness such as connected guilds, current voice channel, speaking users, active jobs, recent failures, personality profile, and transcription hints. This is current state, not the durable event log.
+## Guardrails
 
-## Database And Search Recommendation
-
-- Prefer Turso Cloud with `@libsql/client`.
-- Recommend Drizzle ORM plus `drizzle-kit` migrations for the first implementation because schema definitions, generated migrations, and Drizzle Studio/Turso UI inspection are more valuable here than Kysely's query-builder purity.
-- Kysely remains reasonable for hand-written SQL-heavy projects, but do not choose it first unless Drizzle/libSQL compatibility is blocked.
-- Store timestamps as Unix epoch milliseconds with names such as `created_at_ms`.
-- Start with normal SQLite/Turso indexes and symbolic filters: guild, channel, user, scope, kind, confidence, importance, time, tags, tool, and status.
-- Add vector similarity later over episodes and memory items after the durable schema and retrieval interfaces settle.
-- Add lexical search later only if useful.
-- Rerank in TypeScript before adopting larger search systems.
-- Do not recommend Vespa or Meilisearch as the first serious implementation.
-
-## Discord Context Rules
-
-- Observe Discord message events while the bot is running and persist them as raw observations.
-- Use Discord fetch for last 20 to 100 messages when invoked, startup/reconnect backfill, repairing missed gaps, and explicit read-this-channel/thread commands.
-- Do not fetch Discord history every time as the main design. The database log should become the source of truth.
+- Do not collapse raw observations, episodes, semantic memory, procedural memory, and self-state into one vague table.
+- Discord fetch is for bounded startup/prelude, gap repair, and explicit read commands. It is not the default response-time source of truth.
+- Store timestamps as epoch milliseconds.
+- Preserve local file fallback when Turso env vars are absent.
 
 ## Acceptance Checks
 
-- The implemented foundation has explicit service-owned writes and migration-owned schema changes.
-- Raw observations, episodes, semantic memories, procedural memories, and self-state are not collapsed into one vague `memories` table.
-- Retrieval supports pragmatic symbolic filters first and leaves vector/lexical search as incremental upgrades.
-- Tests cover schema initialization/migrations and service read/write behavior using local libSQL or in-memory SQLite where practical.
-- Typecheck and focused tests pass.
+- Focused memory/channel-cache tests pass.
+- `bun run typecheck` and `bun run check` pass.
+- A live mention can answer using recent non-ping channel messages from the database.

@@ -15,6 +15,7 @@ import { createTursoMemoryService } from '../memory/TursoMemoryService';
 import { createLoggingService } from '../observability/LoggingService';
 import { createMetricsService } from '../observability/MetricsService';
 import { createRealtimeDebugCaptureService } from '../observability/RealtimeDebugCaptureService';
+import { createPersonalityService } from '../personality/PersonalityService';
 import { createRustSidecarService } from '../sidecar/RustSidecarService';
 import { createAssemblyAiTranscriptionService } from '../transcription/AssemblyAiTranscriptionService';
 import { createTranscriptStitcherService } from '../transcription/TranscriptStitcherService';
@@ -56,6 +57,7 @@ export const createAppServices = (env: Env) => {
     const transcripts = createTranscriptStitcherService();
     const conversationEngine = createConversationEngineRuntime();
     const memory = createTursoMemoryService(env);
+    const personality = createPersonalityService(memory);
     const ai = createVercelAiGatewayService(env);
     const tts = createElevenLabsTtsService(env);
     const tools = createToolService();
@@ -83,6 +85,7 @@ export const createAppServices = (env: Env) => {
     const conversation: ConversationService = createConversationService({
         transcripts,
         memory,
+        personality,
     });
 
     tools.registerTool(createPingTool());
@@ -107,6 +110,7 @@ export const createAppServices = (env: Env) => {
         conversationEngine,
         ai,
         conversation,
+        personality,
         tts,
         memory,
         tools,
