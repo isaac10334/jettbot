@@ -29,6 +29,13 @@ const createFakeSidecar = (options: { readonly failType?: string } = {}) => {
           message: "track_state=Play",
         }), 0);
       }
+      if (command.type === "PlayAudioStreamEnd") {
+        setTimeout(() => events.emit({
+          type: "PlaybackFinished",
+          guild_id: "guild",
+          stream_id: command.stream_id,
+        }), 0);
+      }
     },
     stop: async () => undefined,
   };
@@ -49,6 +56,41 @@ describe("VoiceService", () => {
     sidecarEvent.emit({ type: "JoinedVoice", guild_id: "guild", channel_id: "channel", session_id: "session" });
     expect(voice.getGuildState("guild")).toEqual({ status: "connected", guildId: "guild", channelId: "channel", sessionId: "session" });
     expect(calls.at(-1)).toEqual({ type: "StartReceive", guild_id: "guild" });
+  });
+
+  test("tracks voice sessions independently per guild", async () => {
+    const { sidecar, calls } = createFakeSidecar();
+    const voice = createVoiceService(sidecar);
+    const sidecarEvent = createSignal<SidecarEvent>();
+    installVoiceSessionPolicy({ env: { sidecar, voice, signals: { sidecarEvent } } } as any);
+
+    await voice.requestJoinVoice("guild-a", "channel-a");
+    await voice.requestJoinVoice("guild-b", "channel-b");
+    sidecarEvent.emit({ type: "JoinedVoice", guild_id: "guild-a", channel_id: "channel-a", session_id: "session-a" });
+    sidecarEvent.emit({ type: "JoinedVoice", guild_id: "guild-b", channel_id: "channel-b", session_id: "session-b" });
+
+    expect(voice.getGuildState("guild-a")).toEqual({ status: "connected", guildId: "guild-a", channelId: "channel-a", sessionId: "session-a" });
+    expect(voice.getGuildState("guild-b")).toEqual({ status: "connected", guildId: "guild-b", channelId: "channel-b", sessionId: "session-b" });
+    expect(calls).toContainEqual({ type: "StartReceive", guild_id: "guild-a" });
+    expect(calls).toContainEqual({ type: "StartReceive", guild_id: "guild-b" });
+  });
+
+  test("leaves all known active voice sessions during cleanup", async () => {
+    const { sidecar, calls } = createFakeSidecar();
+    const voice = createVoiceService(sidecar);
+    voice.setGuildState("guild-a", { status: "connected", guildId: "guild-a", channelId: "channel-a", sessionId: "session-a" });
+    voice.setGuildState("guild-b", { status: "connecting", guildId: "guild-b", channelId: "channel-b" });
+    voice.setGuildState("guild-c", { status: "disconnected", guildId: "guild-c" });
+
+    await voice.requestLeaveAllVoice();
+
+    expect(calls).toContainEqual({ type: "StopPlayback", guild_id: "guild-a" });
+    expect(calls).toContainEqual({ type: "LeaveVoice", guild_id: "guild-a" });
+    expect(calls).toContainEqual({ type: "StopPlayback", guild_id: "guild-b" });
+    expect(calls).toContainEqual({ type: "LeaveVoice", guild_id: "guild-b" });
+    expect(calls).not.toContainEqual({ type: "LeaveVoice", guild_id: "guild-c" });
+    expect(voice.getGuildState("guild-a")).toEqual({ status: "disconnected", guildId: "guild-a" });
+    expect(voice.getGuildState("guild-b")).toEqual({ status: "disconnected", guildId: "guild-b" });
   });
 
   test("records the failed sidecar boundary when join fails", async () => {

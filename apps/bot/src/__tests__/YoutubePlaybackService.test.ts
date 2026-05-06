@@ -28,7 +28,7 @@ const guildId = "guild";
 
 const createHarness = (options: { readonly playAudioFile?: (input: { readonly guildId: string; readonly streamId: string; readonly format: string; readonly path: string }) => Promise<void> } = {}) => {
   const sidecarEvents = createSignal<SidecarEvent>();
-  const playCalls: Array<{ streamId: string; format: string; path: string }> = [];
+  const playCalls: Array<{ guildId: string; streamId: string; format: string; path: string }> = [];
   const stopCalls: string[] = [];
   const sidecar: RustSidecarService = {
     events: sidecarEvents,
@@ -53,6 +53,7 @@ const createHarness = (options: { readonly playAudioFile?: (input: { readonly gu
       setGuildState: () => undefined,
       requestJoinVoice: async () => undefined,
       requestLeaveVoice: async () => undefined,
+      requestLeaveAllVoice: async () => undefined,
       enqueueTtsPlayback: async () => undefined,
       startPlayback: async () => undefined,
       playAudioFile: async (input) => {
@@ -146,5 +147,18 @@ describe("YoutubePlaybackService", () => {
 
     expect(service.getGuildState(guildId).queue).toEqual([]);
     expect(stopCalls).toEqual(["youtube", "voice:guild"]);
+  });
+
+  test("keeps playback queues isolated by guild", async () => {
+    const { service, playCalls } = createHarness();
+    await service.enqueue({ guildId: "guild-a", query: "first-a", requestedByUserId: "user" });
+    await service.enqueue({ guildId: "guild-b", query: "first-b", requestedByUserId: "user" });
+
+    await waitFor(() => service.getGuildState("guild-a").current?.status === "playing");
+    await waitFor(() => service.getGuildState("guild-b").current?.status === "playing");
+
+    expect(playCalls.map((call) => call.guildId).sort()).toEqual(["guild-a", "guild-b"]);
+    expect(service.getGuildState("guild-a").current?.media.title).toBe("first-a");
+    expect(service.getGuildState("guild-b").current?.media.title).toBe("first-b");
   });
 });

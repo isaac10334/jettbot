@@ -8,14 +8,15 @@ const createRuntime = () => {
     runtime: {
       env: {
         youtubePlayback: {
-          skip: async () => {
-            calls.push("skip");
+          skip: async (guildId: string) => {
+            calls.push(`skip:${guildId}`);
           },
-          cancelAll: async () => {
-            calls.push("cancelAll");
+          cancelAll: async (guildId: string) => {
+            calls.push(`cancelAll:${guildId}`);
           },
+          getGuildState: () => ({ current: undefined, queue: [], lastError: undefined, uiMessage: undefined }),
           state: {
-            get: () => ({ current: undefined, queue: [], lastError: undefined, uiMessage: undefined }),
+            get: () => ({ guilds: { guild: { current: undefined, queue: [], lastError: undefined, uiMessage: undefined } } }),
           },
         },
       },
@@ -29,6 +30,7 @@ const createInteraction = (customId: string) => {
     calls,
     interaction: {
       customId,
+      guildId: "guild",
       deferUpdate: async () => {
         calls.push("deferUpdate");
       },
@@ -46,7 +48,7 @@ describe("YouTube playback buttons", () => {
 
     await __discordVoiceCommandPolicyTestUtils.handleYoutubeButton(runtime as any, interaction as any);
 
-    expect(calls).toEqual(["skip"]);
+    expect(calls).toEqual(["skip:guild"]);
   });
 
   test("maps yt:stop to cancelAll", async () => {
@@ -55,7 +57,7 @@ describe("YouTube playback buttons", () => {
 
     await __discordVoiceCommandPolicyTestUtils.handleYoutubeButton(runtime as any, interaction as any);
 
-    expect(calls).toEqual(["cancelAll"]);
+    expect(calls).toEqual(["cancelAll:guild"]);
   });
 
   test("ignores unknown button custom ids", async () => {

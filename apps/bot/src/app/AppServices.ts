@@ -5,6 +5,7 @@ import {
 import { createVercelAiGatewayService } from '../ai/VercelAiGatewayService';
 import { createAudioNormalizationService } from '../audio/AudioNormalizationService';
 import { createDiscordService } from '../discord/DiscordService';
+import { createConversationEngineRuntime } from '../conversation/ConversationEngineRuntime';
 import type { Env } from '../Env';
 import { createBraveImageSearchService } from '../image/BraveImageSearchService';
 import { createImageRateLimitService } from '../image/ImageRateLimitService';
@@ -53,6 +54,7 @@ export const createAppServices = (env: Env) => {
     const discord = createDiscordService(env);
     const transcription = createAssemblyAiTranscriptionService(env);
     const transcripts = createTranscriptStitcherService();
+    const conversationEngine = createConversationEngineRuntime();
     const memory = createTursoMemoryService(env);
     const ai = createVercelAiGatewayService(env);
     const tts = createElevenLabsTtsService(env);
@@ -68,7 +70,9 @@ export const createAppServices = (env: Env) => {
         sidecar,
         console: logging.console,
     });
-    const imageSearch = createBraveImageSearchService(env);
+    const imageSearch = createBraveImageSearchService(env, {
+        console: logging.console,
+    });
     const imageRateLimits = createImageRateLimitService({
         limit: env.JETTBOT_IMAGE_SEARCH_RATE_LIMIT_COUNT,
         windowMs: env.JETTBOT_IMAGE_SEARCH_RATE_LIMIT_WINDOW_MS,
@@ -100,6 +104,7 @@ export const createAppServices = (env: Env) => {
         audioNormalization,
         transcription,
         transcripts,
+        conversationEngine,
         ai,
         conversation,
         tts,

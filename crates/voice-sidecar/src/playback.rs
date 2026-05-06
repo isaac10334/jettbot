@@ -36,6 +36,7 @@ struct PcmPlaybackStream {
     sender: Sender<Vec<u8>>,
     chunk_count: u64,
     byte_count: u64,
+    pending_byte: Option<u8>,
 }
 
 #[derive(Debug, Default)]
@@ -55,6 +56,7 @@ impl PlaybackState {
                 sender,
                 chunk_count: 0,
                 byte_count: 0,
+                pending_byte: None,
             },
         );
         Ok(input)
@@ -64,11 +66,22 @@ impl PlaybackState {
         let Some(buffer) = self.streams.get_mut(stream_id) else {
             return Err(SidecarError::NotJoined);
         };
-        let f32_bytes = pcm_s16le_to_f32le(bytes)?;
-        buffer
-            .sender
-            .send(f32_bytes)
-            .map_err(|_| SidecarError::InvalidAudioFormat("playback reader ended".into()))?;
+        let mut aligned =
+            Vec::with_capacity(bytes.len() + usize::from(buffer.pending_byte.is_some()));
+        if let Some(byte) = buffer.pending_byte.take() {
+            aligned.push(byte);
+        }
+        aligned.extend_from_slice(bytes);
+        if aligned.len() % 2 == 1 {
+            buffer.pending_byte = aligned.pop();
+        }
+        if !aligned.is_empty() {
+            let f32_bytes = pcm_s16le_to_f32le(&aligned)?;
+            buffer
+                .sender
+                .send(f32_bytes)
+                .map_err(|_| SidecarError::InvalidAudioFormat("playback reader ended".into()))?;
+        }
         buffer.chunk_count += 1;
         buffer.byte_count += bytes.len() as u64;
         Ok(PlaybackChunkStats {
@@ -557,5 +570,15 @@ mod tests {
         assert_eq!(state.stream_ids(), vec!["stream-a".to_string()]);
         state.stop();
         assert!(state.stream_ids().is_empty());
+    }
+
+    #[test]
+    fn playback_state_carries_odd_pcm_byte_across_chunks() {
+        let mut state = PlaybackState::default();
+        let _input = state.begin("stream-a", "pcm_24000").unwrap();
+        assert!(state.push("stream-a", &[0]).is_ok());
+        let stats = state.push("stream-a", &[0]).unwrap();
+        assert_eq!(stats.chunk_count, 2);
+        assert_eq!(stats.byte_count, 2);
     }
 }

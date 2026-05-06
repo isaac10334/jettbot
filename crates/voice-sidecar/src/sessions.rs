@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct VoiceSession {
@@ -53,6 +53,10 @@ impl SessionState {
     pub fn take(&mut self, guild_id: &str) -> Option<VoiceSession> {
         self.sessions.remove(guild_id)
     }
+
+    pub fn guild_ids(&self) -> Vec<String> {
+        self.sessions.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -70,6 +74,7 @@ mod tests {
         assert_eq!(state.take("1").unwrap().guild_id, "1");
         assert!(state.get("1").is_none());
         assert!(state.get("4").is_some());
+        assert_eq!(state.guild_ids(), vec!["4".to_string()]);
     }
 
     #[test]

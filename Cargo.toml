@@ -2,3 +2,5 @@
 members = ["crates/voice-sidecar"]
 resolver = "2"
 
+[patch.crates-io]
+songbird = { path = "vendor/songbird-0.6.0-client-connect" }

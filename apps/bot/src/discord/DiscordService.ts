@@ -23,6 +23,7 @@ export interface DiscordService {
   readonly login: () => Promise<void>;
   readonly registerSlashCommands: () => Promise<void>;
   readonly sendText: (channelId: string, content: string) => Promise<void>;
+  readonly resolveMemberProfile: (guildId: string, userId: string) => Promise<{ readonly userId: string; readonly username?: string; readonly displayName?: string }>;
   readonly resolveMemberVoiceChannel: (guildId: string, userId: string) => Promise<string | undefined>;
   readonly destroy: () => void;
 }
@@ -70,6 +71,15 @@ export const createDiscordService = (env: Env): DiscordService => {
       if (channel?.type === ChannelType.GuildText || channel?.type === ChannelType.PublicThread || channel?.type === ChannelType.PrivateThread) {
         await channel.send(content);
       }
+    },
+    resolveMemberProfile: async (guildId, userId) => {
+      const guild = await client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      return {
+        userId,
+        username: member.user.username,
+        displayName: member.displayName,
+      };
     },
     resolveMemberVoiceChannel: async (guildId, userId) => {
       const guild = await client.guilds.fetch(guildId);

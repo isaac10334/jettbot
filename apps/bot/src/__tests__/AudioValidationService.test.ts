@@ -23,6 +23,31 @@ const wav = (input: { readonly sampleRate: number; readonly channels: number; re
   return bytes;
 };
 
+const wavWithListChunk = (): Uint8Array => {
+  const bytes = new Uint8Array(60);
+  const view = new DataView(bytes.buffer);
+  const writeAscii = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) bytes[offset + index] = value.charCodeAt(index);
+  };
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 52, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, 48_000, true);
+  view.setUint32(28, 192_000, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "LIST");
+  view.setUint32(40, 4, true);
+  writeAscii(44, "INFO");
+  writeAscii(48, "data");
+  view.setUint32(52, 4, true);
+  return bytes;
+};
+
 describe("AudioValidationService", () => {
   test("validates canonical PCM s16le wav metadata", () => {
     expect(validatePcmS16leWav(wav({ sampleRate: 16000, channels: 1, dataBytes: 3200 }))).toEqual({
@@ -33,6 +58,18 @@ describe("AudioValidationService", () => {
       bitsPerSample: 16,
       dataBytes: 3200,
       durationMs: 100,
+    });
+  });
+
+  test("validates PCM WAV when metadata chunks appear before data", () => {
+    expect(validatePcmS16leWav(wavWithListChunk())).toEqual({
+      format: "wav",
+      audioFormat: 1,
+      sampleRate: 48000,
+      channels: 2,
+      bitsPerSample: 16,
+      dataBytes: 4,
+      durationMs: 4 / (48000 * 2 * 2) * 1000,
     });
   });
 

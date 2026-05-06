@@ -29,6 +29,7 @@ Installers attach long-lived behavior:
 - `installDiscordCommands`
 - `installVoiceSessionPolicy`
 - `installTranscriptionPipeline`
+- `installConversationEngineRuntime`
 - `installAiResponsePolicy`
 - `installTtsPlaybackPipeline`
 - `installDiscordVoiceCommandPolicy`
@@ -66,6 +67,12 @@ Run `bun run discord:commands:refresh` to clear and re-register slash commands f
 
 AssemblyAI is used for realtime speech-to-text. Its promptable transcription is important for Jettbot: user memory and per-user context can later be fed into STT prompts to improve recognition of names, game terms, group slang, and user-specific lingo. The architecture should preserve per-user transcription/stitching and authorization context so tool calls can be evaluated against who actually spoke.
 
+Voice response control is split into three layers:
+
+- `ConversationEngineRuntime` ingests speaker-labeled transcript and playback events, tracks bot speech state, and emits explicit decisions such as `speak`, `queueSpeech`, `wait`, `ignore`, and `interruptSelf`.
+- AI response policy consumes only speak-like decisions and generates response text. Final transcript events must not directly trigger TTS.
+- The speech controller path owns ElevenLabs and sidecar playback. It serializes Jettbot speech per guild and waits for reliable sidecar playback end, not input-send completion.
+
 ## Current External APIs/SDKs
 
 - Discord API through `discord.js` for gateway events, slash commands, and message components.
@@ -83,6 +90,8 @@ AssemblyAI is used for realtime speech-to-text. Its promptable transcription is 
 
 The Rust voice sidecar is treated as an external runtime behind `RustSidecarService`. Raw sidecar stderr is written to a separate append-only file, while only lines at or above `JETTBOT_SIDECAR_CONSOLE_LEVEL` are promoted into the app console. This keeps Serenity/Songbird trace noise inspectable without flooding `bun dev`.
 
+Rust/TypeScript communication is JSONL over stdio: TypeScript sends typed sidecar commands on stdin, Rust writes command responses and events on stdout, and Rust stderr remains diagnostic log output. Do not let arbitrary policies write raw sidecar commands; add typed service/runtime methods and tests at the `VoiceService` or sidecar bridge boundary.
+
 `MetricsService` keeps in-process counters and timing summaries, then periodically snapshots them to JSON. Metrics are intentionally cheap: command paths increment counters and record duration without awaiting disk writes.
 
 `RealtimeDebugCaptureService` is an observability bridge for difficult voice and streaming behavior. It creates one local folder per joined voice session under `JETTBOT_REALTIME_DEBUG_DIR`, using readable local-time folder names such as `5-2-26_11-02-AM_<guild>_<channel>_<session>`. Runtime policies can write boundary artifacts there without owning file layout:
@@ -90,8 +99,10 @@ The Rust voice sidecar is treated as an external runtime behind `RustSidecarServ
 - `audio/users/<userId>/discord-input.wav` for PCM chunks emitted by the sidecar.
 - `audio/users/<userId>/assemblyai-input.wav` for the normalized bytes sent to AssemblyAI. Discord receive audio is converted from 48 kHz stereo PCM s16le to 16 kHz mono PCM s16le first.
 - `audio/tts/<streamId>-elevenlabs-output.<ext>` for TTS provider audio chunks.
-- `audio/tts/<streamId>-discord-input.<ext>` for audio chunks sent to the sidecar for playback. The first supported playback path uses ElevenLabs `pcm_24000`; the Rust sidecar converts PCM s16le chunks to f32 samples for Songbird `RawAdapter`.
+- `audio/tts/<streamId>-sidecar-input.<ext>` for audio chunks sent to the sidecar for playback. The first supported playback path uses ElevenLabs `pcm_24000`; the Rust sidecar converts PCM s16le chunks to f32 samples for Songbird `RawAdapter`.
 - `text/*.jsonl` and `text/*.txt` for voice events, transcript turns, LLM request messages, token streams, responses, and TTS phrase metadata.
+
+See [Audio debugging reference](audio-debugging-reference.md) before changing voice packet sizing, SSRC attribution, WAV parsing, ElevenLabs output formats, or sidecar playback behavior.
 
 Default files:
 

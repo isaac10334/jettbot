@@ -4,6 +4,9 @@ import type {
     TranscriptTurn,
 } from '../transcription/TranscriptStitcherService';
 
+const speakerLabel = (turn: TranscriptTurn): string =>
+    turn.displayName ?? turn.username ?? turn.userId;
+
 export interface ConversationService {
     readonly buildMessages: (
         turn: TranscriptTurn,
@@ -27,7 +30,7 @@ export const createConversationService = (input: {
         );
         const transcriptContext = input.transcripts
             .recentContext(12)
-            .map((item) => `${item.username ?? item.userId}: ${item.text}`)
+            .map((item) => `${speakerLabel(item)} (${item.userId}): ${item.text}`)
             .join('\n');
         return [
             {
@@ -45,7 +48,7 @@ export const createConversationService = (input: {
                 : []),
             {
                 role: 'user',
-                content: `Conversation so far:\n${transcriptContext}\n\nMost recent final turn: ${turn.userId}: ${turn.text}\n\nPredict the next single turn.`,
+                content: `Conversation so far:\n${transcriptContext}\n\nMost recent final turn: ${speakerLabel(turn)} (${turn.userId}): ${turn.text}\n\nPredict the next single turn.`,
             },
         ];
     },

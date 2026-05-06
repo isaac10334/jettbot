@@ -7,6 +7,11 @@ export interface AiResponseCompleteSignal {
   readonly guildId?: string;
   readonly channelId?: string;
   readonly sessionId?: string;
+  readonly turnId?: string;
+  readonly decisionId?: string;
+  readonly priority?: string;
+  readonly interruptMode?: string;
+  readonly responseId?: string;
 }
 
 export interface AppSignals {

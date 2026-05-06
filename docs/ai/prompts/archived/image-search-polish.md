@@ -27,3 +27,7 @@ Improve the private-bot image search experience after safe search defaulted to o
 - Session TTL behavior is documented or made more ergonomic.
 - Focused tests cover result rendering/session expiration behavior where practical.
 - `bun run typecheck` and focused tests pass.
+
+## Pasted Brave Search Documentation
+
+[Here is the pasted Brave Search API documentation.](../../references/brave_image_search_docs.md)

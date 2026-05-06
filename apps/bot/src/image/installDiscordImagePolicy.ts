@@ -1,12 +1,16 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, type ButtonInteraction, type ChatInputCommandInteraction, type Message } from "discord.js";
+import type { Console } from "@loop-kit/common/Console";
 import { installedVoid, type Installer, type Runtime } from "@loop-kit/common/Runtime";
 import type { AppEnv } from "../app/AppRuntime";
-import { defaultImageSafeSearch } from "./ImageSearchService";
+import type { MetricsService } from "../observability/MetricsService";
+import { defaultImageSafeSearch, type ImageSearchResult } from "./ImageSearchService";
 import type { ImageSearchSession } from "./ImageSearchSessionService";
 
 const commandName = "img";
 const customPrefix = "img";
 const ephemeral = { flags: MessageFlags.Ephemeral } as const;
+const minimumOriginalWidth = 700;
+const minimumOriginalHeight = 350;
 
 const parseMessageQuery = (message: Message): string | undefined => {
   const match = /^\.img(?:\s+(.+))?$/i.exec(message.content.trim());
@@ -23,14 +27,56 @@ const parseCustomId = (value: string): { readonly direction: "prev" | "next"; re
   return { direction, sessionId };
 };
 
-const renderSession = (session: ImageSearchSession) => {
+const shouldUseOriginalImage = (result: ImageSearchResult): boolean => {
+  if (result.width == null || result.height == null) return false;
+  return result.width >= minimumOriginalWidth && result.height >= minimumOriginalHeight;
+};
+
+const selectEmbedImageUrl = (result: ImageSearchResult): { readonly url: string; readonly source: "original" | "thumbnail" } => {
+  if (shouldUseOriginalImage(result)) return { url: result.imageUrl, source: "original" };
+  if (result.thumbnailUrl) return { url: result.thumbnailUrl, source: "thumbnail" };
+  return { url: result.imageUrl, source: "original" };
+};
+
+const recordImageSelection = (metrics: MetricsService | undefined, result: ImageSearchResult, source: "original" | "thumbnail") => {
+  metrics?.increment(`image.render.${source}`);
+  if (result.width != null) metrics?.recordTiming("image.render.original_width_px", result.width);
+  if (result.height != null) metrics?.recordTiming("image.render.original_height_px", result.height);
+  if (result.thumbnailWidth != null) metrics?.recordTiming("image.render.thumbnail_width_px", result.thumbnailWidth);
+  if (result.thumbnailHeight != null) metrics?.recordTiming("image.render.thumbnail_height_px", result.thumbnailHeight);
+};
+
+const logImageSelection = (console: Console | undefined, session: ImageSearchSession, result: ImageSearchResult, image: { readonly url: string; readonly source: "original" | "thumbnail" }) => {
+  console?.info("image.render.selection", {
+    sessionId: session.id,
+    query: session.query,
+    index: session.index,
+    resultCount: session.results.length,
+    selectedSource: image.source,
+    selectedUrl: image.url,
+    title: result.title,
+    pageUrl: result.pageUrl,
+    imageUrl: result.imageUrl,
+    thumbnailUrl: result.thumbnailUrl,
+    source: result.source,
+    width: result.width,
+    height: result.height,
+    thumbnailWidth: result.thumbnailWidth,
+    thumbnailHeight: result.thumbnailHeight,
+  });
+};
+
+const renderSession = (session: ImageSearchSession, metrics?: MetricsService, console?: Console) => {
   const result = session.results[session.index];
   if (!result) return { content: "No image results.", embeds: [], components: [] };
+  const image = selectEmbedImageUrl(result);
+  recordImageSelection(metrics, result, image.source);
+  logImageSelection(console, session, result, image);
 
   const embed = new EmbedBuilder()
     .setTitle(result.title.slice(0, 256))
     .setURL(result.pageUrl)
-    .setImage(result.thumbnailUrl ?? result.imageUrl)
+    .setImage(image.url)
     .setFooter({ text: `Image ${session.index + 1}/${session.results.length}${result.source ? ` - ${result.source}` : ""}` });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -71,6 +117,12 @@ const runSearch = async (runtime: Runtime<AppEnv>, input: {
   try {
     const response = await runtime.env.imageSearch.search({ query: input.query, count: runtime.env.env.JETTBOT_IMAGE_SEARCH_COUNT, safeSearch: defaultImageSafeSearch });
     if (response.results.length === 0) throw new Error(`No image results for "${input.query}".`);
+    runtime.env.console.info("image.search.completed", {
+      query: response.query,
+      resultCount: response.results.length,
+      requestedCount: runtime.env.env.JETTBOT_IMAGE_SEARCH_COUNT,
+      safeSearch: defaultImageSafeSearch,
+    });
     runtime.env.metrics.increment("image.search.completed");
     runtime.env.metrics.recordTiming("image.search.duration_ms", performance.now() - start);
     return runtime.env.imageSearchSessions.create({ ownerUserId: input.userId, response });
@@ -93,7 +145,7 @@ const handleMessage = async (runtime: Runtime<AppEnv>, message: Message) => {
     userId: message.author.id,
     rateLimitKey: `message:${message.guildId}:${message.author.id}`,
   });
-  await message.reply(renderSession(session));
+  await message.reply(renderSession(session, runtime.env.metrics, runtime.env.console));
 };
 
 const handleCommand = async (runtime: Runtime<AppEnv>, interaction: ChatInputCommandInteraction) => {
@@ -110,7 +162,7 @@ const handleCommand = async (runtime: Runtime<AppEnv>, interaction: ChatInputCom
     userId: interaction.user.id,
     rateLimitKey: `command:${interaction.guildId}:${interaction.user.id}`,
   });
-  await interaction.editReply(renderSession(session));
+  await interaction.editReply(renderSession(session, runtime.env.metrics, runtime.env.console));
 };
 
 const handleButton = async (runtime: Runtime<AppEnv>, interaction: ButtonInteraction) => {
@@ -119,7 +171,7 @@ const handleButton = async (runtime: Runtime<AppEnv>, interaction: ButtonInterac
 
   const existing = runtime.env.imageSearchSessions.get(parsed.sessionId);
   if (!existing) {
-    await interaction.reply({ content: "That image search expired. Run `.img` or `/img` again.", ...ephemeral });
+    await interaction.deferUpdate().catch(() => undefined);
     return;
   }
   if (existing.ownerUserId !== interaction.user.id) {
@@ -129,10 +181,10 @@ const handleButton = async (runtime: Runtime<AppEnv>, interaction: ButtonInterac
 
   const session = runtime.env.imageSearchSessions.move(parsed.sessionId, parsed.direction);
   if (!session) {
-    await interaction.reply({ content: "That image search expired. Run `.img` or `/img` again.", ...ephemeral });
+    await interaction.deferUpdate().catch(() => undefined);
     return;
   }
-  await interaction.update(renderSession(session));
+  await interaction.update(renderSession(session, runtime.env.metrics, runtime.env.console));
 };
 
 export const installDiscordImagePolicy: Installer<AppEnv> = (runtime) => {
@@ -166,4 +218,13 @@ export const installDiscordImagePolicy: Installer<AppEnv> = (runtime) => {
     unsubscribeCommands();
     unsubscribeButtons();
   });
+};
+
+export const __discordImagePolicyTestUtils = {
+  handleButton,
+  handleCommand,
+  handleMessage,
+  parseCustomId,
+  renderSession,
+  selectEmbedImageUrl,
 };

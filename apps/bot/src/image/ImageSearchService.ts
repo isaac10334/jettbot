@@ -1,5 +1,7 @@
 export type ImageSafeSearch = "strict" | "off";
 
+// Brave Image Search defaults to strict if omitted. Jettbot is a private bot:
+// keep this off and always send safesearch=off on image requests.
 export const defaultImageSafeSearch: ImageSafeSearch = "off";
 
 export interface ImageSearchRequest {
@@ -18,6 +20,8 @@ export interface ImageSearchResult {
   readonly source?: string;
   readonly width?: number;
   readonly height?: number;
+  readonly thumbnailWidth?: number;
+  readonly thumbnailHeight?: number;
 }
 
 export interface ImageSearchResponse {

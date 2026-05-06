@@ -221,6 +221,7 @@ async fn handle_command(
                 channel_id: Some(session.channel_id.clone()),
                 session_id: Some(session.session_id.clone()),
                 user_id: None,
+                ssrc: None,
                 byte_count: None,
             }));
         }
@@ -235,12 +236,15 @@ async fn handle_command(
                 channel_id: Some(session.channel_id.clone()),
                 session_id: Some(session.session_id.clone()),
                 user_id: None,
+                ssrc: None,
                 byte_count: None,
             }));
         }
         SidecarCommand::PlayAudioStreamBegin {
             guild_id,
-            stream_id, format, ..
+            stream_id,
+            format,
+            ..
         } => {
             let _ = out.send(SidecarOutput::Event(SidecarEvent::PlaybackDebug {
                 guild_id: Some(guild_id.clone()),
@@ -529,6 +533,9 @@ async fn handle_command(
             ..
         } => {
             let _ = out.send(SidecarOutput::Event(SidecarEvent::UserAudioChunk {
+                guild_id: "fake-guild".into(),
+                channel_id: "fake-channel".into(),
+                session_id: "fake-session".into(),
                 user_id,
                 pcm_s16le_base64,
                 sample_rate,
@@ -536,7 +543,21 @@ async fn handle_command(
                 timestamp_ms: 0,
             }));
         }
-        SidecarCommand::Shutdown { .. } => {}
+        SidecarCommand::Shutdown { .. } => {
+            // Shutdown is the sidecar backstop; TypeScript runtime disposal should leave first.
+            if let Some(context) = discord_state.context().await {
+                let guild_ids = session_state.lock().await.guild_ids();
+                for guild_id in guild_ids {
+                    let mut state = session_state.lock().await;
+                    let session = voice::leave_voice(&context, &mut state, &guild_id).await?;
+                    drop(state);
+                    let _ = out.send(SidecarOutput::Event(SidecarEvent::LeftVoice {
+                        guild_id: Some(guild_id),
+                        session_id: session.map(|value| value.session_id),
+                    }));
+                }
+            }
+        }
     }
     Ok(())
 }

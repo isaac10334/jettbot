@@ -12,6 +12,9 @@
     "sidecar:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sidecar.ps1 build",
     "sidecar:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sidecar.ps1 run",
     "discord:commands:refresh": "bun run scripts/refresh-discord-commands.ts",
+    "voice:analyze": "bun run scripts/analyze-voice-sessions.ts",
+    "voice:cleanup-logs": "bun run scripts/cleanup-realtime-sessions.ts --keep 3",
+    "voice:diagnose-audio": "bun run scripts/diagnose-voice-audio.ts",
     "test": "bun test",
     "check": "bun run typecheck && bun test && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sidecar.ps1 test"
   },

@@ -11,11 +11,19 @@ const rowToMessage = (row: Record<string, unknown>): MemoryMessage => ({
   createdAt: Number(row.created_at ?? 0),
 });
 
+type MemoryTable = "messages" | "transcript_turns" | "tool_events";
+
 export const createTursoMemoryService = (env: Env): MemoryService => {
   const client: Client = createClient({
     url: env.TURSO_DATABASE_URL ?? "file:jettbot-memory.db",
     ...(env.TURSO_AUTH_TOKEN ? { authToken: env.TURSO_AUTH_TOKEN } : {}),
   });
+
+  const addColumnIfMissing = async (table: MemoryTable, column: string, definition: string) => {
+    const result = await client.execute(`PRAGMA table_info(${table})`);
+    const hasColumn = result.rows.some((row) => row.name === column);
+    if (!hasColumn) await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  };
 
   const initialize = async () => {
     await client.batch(
@@ -25,22 +33,26 @@ export const createTursoMemoryService = (env: Env): MemoryService => {
         "CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id INTEGER, model TEXT, vector BLOB)",
         "CREATE TABLE IF NOT EXISTS tool_events (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, channel_id TEXT, session_id TEXT, tool_name TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT, created_at INTEGER NOT NULL)",
+      ],
+      "write",
+    );
+
+    await addColumnIfMissing("messages", "guild_id", "TEXT");
+    await addColumnIfMissing("transcript_turns", "guild_id", "TEXT");
+    await addColumnIfMissing("transcript_turns", "channel_id", "TEXT");
+    await addColumnIfMissing("transcript_turns", "session_id", "TEXT");
+    await addColumnIfMissing("tool_events", "guild_id", "TEXT");
+    await addColumnIfMissing("tool_events", "channel_id", "TEXT");
+    await addColumnIfMissing("tool_events", "session_id", "TEXT");
+
+    await client.batch(
+      [
         "CREATE INDEX IF NOT EXISTS idx_messages_scope_time ON messages (guild_id, channel_id, user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_transcript_turns_scope_time ON transcript_turns (guild_id, channel_id, session_id, user_id, received_at)",
         "CREATE INDEX IF NOT EXISTS idx_tool_events_scope_time ON tool_events (guild_id, channel_id, session_id, created_at)",
       ],
       "write",
     );
-    for (const sql of [
-      "ALTER TABLE transcript_turns ADD COLUMN guild_id TEXT",
-      "ALTER TABLE transcript_turns ADD COLUMN channel_id TEXT",
-      "ALTER TABLE transcript_turns ADD COLUMN session_id TEXT",
-      "ALTER TABLE tool_events ADD COLUMN guild_id TEXT",
-      "ALTER TABLE tool_events ADD COLUMN channel_id TEXT",
-      "ALTER TABLE tool_events ADD COLUMN session_id TEXT",
-    ]) {
-      await client.execute(sql).catch(() => undefined);
-    }
   };
 
   return {

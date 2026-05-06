@@ -8,6 +8,7 @@ export interface VoiceService {
   readonly setGuildState: (guildId: string, guildState: VoiceGuildState) => void;
   readonly requestJoinVoice: (guildId: string, channelId: string) => Promise<void>;
   readonly requestLeaveVoice: (guildId: string) => Promise<void>;
+  readonly requestLeaveAllVoice: () => Promise<void>;
   readonly enqueueTtsPlayback: (input: { readonly guildId: string; readonly streamId: string; readonly format: string; readonly chunks: AsyncIterable<Uint8Array> }) => Promise<void>;
   readonly startPlayback: (input: { readonly guildId: string; readonly streamId: string; readonly format: string; readonly chunks: AsyncIterable<Uint8Array>; readonly pace?: boolean }) => Promise<void>;
   readonly playAudioFile: (input: { readonly guildId: string; readonly streamId: string; readonly format: string; readonly path: string }) => Promise<void>;
@@ -23,6 +24,7 @@ interface PcmPlaybackFormat {
 const playbackChunkDurationMs = 100;
 const playbackLeadMs = 500;
 const playbackReadyTimeoutMs = 5_000;
+const playbackEndTimeoutMs = 120_000;
 
 const sleep = async (durationMs: number): Promise<void> => {
   if (durationMs <= 0) return;
@@ -68,6 +70,10 @@ export const createVoiceService = (sidecar: RustSidecarService): VoiceService =>
   const setGuildState = (guildId: string, guildState: VoiceGuildState): void => {
     state.set({ sessions: { ...state.get().sessions, [guildId]: guildState } });
   };
+  const activeVoiceGuildIds = (): string[] =>
+    Object.values(state.get().sessions)
+      .filter((session) => session.status !== "disconnected")
+      .map((session) => session.guildId);
 
   const waitForPlaybackReady = async (streamId: string): Promise<void> => {
     await new Promise<void>((resolve, reject) => {
@@ -90,6 +96,36 @@ export const createVoiceService = (sidecar: RustSidecarService): VoiceService =>
         }
       });
     });
+  };
+
+  const waitForPlaybackEnd = (streamId: string): { readonly promise: Promise<void>; readonly dispose: () => void } => {
+    let unsubscribe: (() => void) | undefined;
+    const promise = new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        unsubscribe?.();
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for playback to end: ${streamId}`));
+      }, playbackEndTimeoutMs);
+      unsubscribe = sidecar.events.subscribe((event) => {
+        if (!("stream_id" in event) || event.stream_id !== streamId) return;
+        if (event.type === "PlaybackFinished" || (event.type === "PlaybackDebug" && event.stage === "end")) {
+          cleanup();
+          resolve();
+          return;
+        }
+        if (event.type === "PlaybackDebug" && event.stage === "error") {
+          cleanup();
+          reject(new Error(`Playback error: ${event.message}`));
+        }
+      });
+    });
+    return {
+      promise,
+      dispose: () => unsubscribe?.(),
+    };
   };
 
   const drainPlayback = async ({
@@ -151,9 +187,28 @@ export const createVoiceService = (sidecar: RustSidecarService): VoiceService =>
         throw error;
       }
     },
+    requestLeaveAllVoice: async () => {
+      const guildIds = activeVoiceGuildIds();
+      const results = await Promise.allSettled(guildIds.map(async (guildId) => {
+        await sidecar.call({ type: "StopPlayback", guild_id: guildId }).catch(() => undefined);
+        await sidecar.call({ type: "LeaveVoice", guild_id: guildId });
+      }));
+      for (const guildId of guildIds) {
+        setGuildState(guildId, { status: "disconnected", guildId });
+      }
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed) throw failed.reason;
+    },
     enqueueTtsPlayback: async ({ guildId, streamId, format, chunks }) => {
+      const ended = waitForPlaybackEnd(streamId);
       await sidecar.call({ type: "PlayAudioStreamBegin", guild_id: guildId, stream_id: streamId, format });
-      await drainPlayback({ streamId, format, chunks });
+      try {
+        await drainPlayback({ streamId, format, chunks });
+        await ended.promise;
+      } catch (error) {
+        ended.dispose();
+        throw error;
+      }
     },
     startPlayback: async ({ guildId, streamId, format, chunks, pace }) => {
       await sidecar.call({ type: "PlayAudioStreamBegin", guild_id: guildId, stream_id: streamId, format });

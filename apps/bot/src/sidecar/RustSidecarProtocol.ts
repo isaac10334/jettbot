@@ -161,6 +161,7 @@ export interface VoiceDebugEvent {
   readonly channel_id?: string;
   readonly session_id?: string;
   readonly user_id?: string;
+  readonly ssrc?: number;
   readonly byte_count?: number;
 }
 

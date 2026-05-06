@@ -147,6 +147,8 @@ pub enum SidecarEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         user_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        ssrc: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         byte_count: Option<u64>,
     },
     PlaybackFinished {
@@ -202,6 +204,7 @@ mod tests {
             channel_id: None,
             session_id: None,
             user_id: None,
+            ssrc: None,
             byte_count: None,
         };
         let text = serde_json::to_string(&event).unwrap();

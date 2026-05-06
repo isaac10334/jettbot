@@ -6,6 +6,7 @@ export interface TranscriptTurn {
   readonly sessionId: string;
   readonly userId: string;
   readonly username?: string;
+  readonly displayName?: string;
   readonly text: string;
   readonly startMs?: number;
   readonly endMs?: number;

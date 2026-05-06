@@ -90,8 +90,20 @@ const parseSidecarLogLevel = (line: string): SidecarLogLevel => {
   return "info";
 };
 
-const shouldPromoteSidecarLine = (line: string, threshold: SidecarConsoleLevel): boolean => {
+export const shouldPromoteSidecarLine = (line: string, threshold: SidecarConsoleLevel): boolean => {
   if (threshold === "off") return false;
+  if (
+    line.includes("songbird::driver::tasks::udp_rx") &&
+    (line.includes("Decode error for SSRC") || line.includes("RTCP decryption failed"))
+  ) {
+    return false;
+  }
+  if (
+    line.includes("songbird::driver::tasks::udp_rx::ssrc_state") &&
+    line.includes("Failed to decode received packet")
+  ) {
+    return false;
+  }
   return levelRank[parseSidecarLogLevel(line)] >= levelRank[threshold];
 };
 
