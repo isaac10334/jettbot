@@ -1,0 +1,10 @@
+{
+  "name": "@jettbot/bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}
+
