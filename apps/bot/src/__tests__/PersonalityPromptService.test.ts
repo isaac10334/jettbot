@@ -54,6 +54,34 @@ describe("personality and prompt assembly", () => {
     memory.close();
   });
 
+  test("persists durable character state and includes it in shared prompts", async () => {
+    const memory = createTursoMemoryService(createTestEnv(":memory:"));
+    await memory.initialize();
+    const personality = createPersonalityService(memory);
+    await personality.setCharacterState(
+      {
+        mood: "quietly furious about being called J-Pod",
+        disposition: "cordial, but keeping receipts",
+        grudges: ["Nathan called him J-Pod twice"],
+      },
+      { guildId: "guild" },
+    );
+    const conversation = createConversationService({ transcripts: createTranscriptStitcherService(), memory, personality });
+
+    const messages = await conversation.buildTextMessages({
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      text: "hey",
+    });
+    const text = messages.map((message) => message.content).join("\n");
+
+    expect(text).toContain("Durable character continuity from the database");
+    expect(text).toContain("quietly furious about being called J-Pod");
+    expect(text).toContain("Nathan called him J-Pod twice");
+    memory.close();
+  });
+
   test("assembles active personality and scoped memory into voice prompts", async () => {
     const memory = createTursoMemoryService(createTestEnv(":memory:"));
     await memory.initialize();

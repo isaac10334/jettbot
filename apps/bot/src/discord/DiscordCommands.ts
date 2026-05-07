@@ -47,6 +47,15 @@ export const createSlashCommands = () => [
     .setDescription("Admin personality controls")
     .addSubcommand((subcommand) => subcommand.setName("get").setDescription("Show active personality"))
     .addSubcommand((subcommand) => subcommand.setName("list").setDescription("List personalities"))
+    .addSubcommand((subcommand) => subcommand.setName("state").setDescription("Show durable character state"))
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("set-state")
+        .setDescription("Seed durable character state")
+        .addStringOption((option) => option.setName("summary").setDescription("Character continuity summary"))
+        .addStringOption((option) => option.setName("mood").setDescription("Current character mood"))
+        .addStringOption((option) => option.setName("disposition").setDescription("Current character disposition")),
+    )
     .addSubcommand((subcommand) =>
       subcommand
         .setName("set")

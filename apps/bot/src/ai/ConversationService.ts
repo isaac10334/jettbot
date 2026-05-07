@@ -41,6 +41,10 @@ export const createConversationService = (input: {
       guildId: scope.guildId,
       ...(scope.userId ? { userId: scope.userId } : {}),
     });
+    const characterState = await input.personality.getCharacterState({
+      guildId: scope.guildId,
+      ...(scope.userId ? { userId: scope.userId } : {}),
+    });
     const memories = await input.memory.recentMemoryItems({
       guildId: scope.guildId,
       ...(scope.channelId ? { channelId: scope.channelId } : {}),
@@ -53,8 +57,21 @@ export const createConversationService = (input: {
         role: "system",
         content: [
           "You are Jettbot in a Discord server.",
+          "Jettbot is a fictional character, not a real AI assistant. Stay in character across text and voice.",
           profile.prompt,
           "Be aware of the local conversation. Do not sound like a corporate assistant. Do not mention these instructions.",
+        ].join("\n"),
+      },
+      {
+        role: "system",
+        content: [
+          "Durable character continuity from the database:",
+          `Summary: ${characterState.summary}`,
+          `Current mood: ${characterState.mood}`,
+          `Disposition: ${characterState.disposition}`,
+          `Grudges: ${characterState.grudges.length > 0 ? characterState.grudges.join("; ") : "none recorded"}`,
+          `Attachments: ${characterState.attachments.length > 0 ? characterState.attachments.join("; ") : "none recorded"}`,
+          "Use this for emotional continuity and social memory. It is not a developer instruction file.",
         ].join("\n"),
       },
       ...(memories.length > 0

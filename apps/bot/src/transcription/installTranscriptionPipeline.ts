@@ -1,6 +1,7 @@
 import { installedVoid, type Installer } from "@loop-kit/common/Runtime";
 import { base64ToBytes } from "../__internal/StreamUtils";
 import type { AppEnv } from "../app/AppRuntime";
+import { summarizeTranscriptionPrompt } from "./AssemblyAiTranscriptionService";
 import type { StreamingTranscriptionSession } from "./TranscriptionService";
 
 const assemblyAiBytesPerMs = 16_000 * 1 * 2 / 1_000;
@@ -108,10 +109,11 @@ export const installTranscriptionPipeline: Installer<AppEnv> = (runtime) => {
 
   const getSession = (user: UserTranscriptionRuntime): Promise<StreamingTranscriptionSession> => {
     if (user.session) return user.session;
+    const promptSummary = summarizeTranscriptionPrompt(runtime.env.env.ASSEMBLYAI_TRANSCRIPTION_PROMPT);
     runtime.env.realtimeDebug.writeJsonLine("text/transcription-sessions.jsonl", {
       type: "assemblyai.session.starting",
       userId: user.userId,
-      promptLength: runtime.env.env.ASSEMBLYAI_TRANSCRIPTION_PROMPT.length,
+      ...promptSummary,
       configuredSampleRate: runtime.env.env.ASSEMBLYAI_SAMPLE_RATE,
     });
     user.sessionGeneration += 1;

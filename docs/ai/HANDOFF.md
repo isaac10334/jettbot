@@ -12,6 +12,8 @@ This is the canonical project memory for the next agent. Keep it concise: curren
 - Memory layers now exist for raw observations, episodes, semantic memories, procedural memories, self-state, personality settings, legacy messages, transcript turns, and tool events.
 - Text-channel memory caches all non-empty user messages plus Jettbot's own bot messages if seen through the gateway. It dedupes by Discord snowflake, fetches 10 prior messages when a channel is first seen, fills at most 100 missed messages for known channels, and stores per-channel cursors in `self_state`.
 - Prompt assembly is centralized in `ConversationService` for text mentions and voice predicted-turn prompts. It includes active personality, scoped memory, cached channel context for text, stitched transcript context for voice, and self-state.
+- Personality now has a DB-backed durable character state stored in `self_state` through `PersonalityService`. Shared prompt assembly includes it for both text and voice as emotional continuity: summary, mood, disposition, grudges, and attachments. Admins can inspect or seed it with `/personality state` and `/personality set-state`.
+- AssemblyAI streaming sessions now send the configured `ASSEMBLYAI_TRANSCRIPTION_PROMPT` on connection when non-empty and log prompt length/hash/preview to realtime debug transcription session JSONL.
 - Current default personality is `unhinged_gremlin`; selectable profiles also include `dry_menace`, `edgy_roaster`, and `chaotic_character`. `/memory` and `/personality` are admin-only through `ADMIN_USER_ID`.
 
 ## Active Prompts
@@ -37,6 +39,8 @@ This is the canonical project memory for the next agent. Keep it concise: curren
 
 ## Recent Verification
 
+- 2026-05-07 character continuity slice: focused `bun test apps/bot/src/__tests__/PersonalityPromptService.test.ts` passed, `bun run typecheck` passed, and full `bun test` passed (`102` tests). Rust sidecar tests, Discord slash command refresh, live text mention, and live voice verification were not run.
+- 2026-05-06 STT prompt observability slice: focused `bun test apps/bot/src/__tests__/TranscriptionPipeline.test.ts` passed and `bun run typecheck` passed. Full test suite and live Discord/AssemblyAI verification were not run.
 - 2026-05-06 text-channel memory continuation: focused Discord channel memory / memory / prompt tests passed, `bun run typecheck` passed, full `bun test` passed (`100` tests), and full `bun run check` passed (`100` Bun tests and `23` Rust tests). Live Discord/Turso verification was not run.
 - 2026-05-06 memory/personality/conversation slice: focused memory/conversation/personality tests passed, `bun run typecheck` passed, full `bun test` passed (`95` tests), and full `bun run check` passed (`95` Bun tests and `23` Rust tests). Discord slash command refresh and live voice verification were not run.
 - Latest proven live voice success remains the 2026-05-05 8:16 PM realtime session. Run a fresh live regression before claiming the current memory/personality code is proven in voice.

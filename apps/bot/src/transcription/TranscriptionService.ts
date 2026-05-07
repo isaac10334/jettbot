@@ -17,6 +17,16 @@ export interface TranscriptionSessionMessageEvent {
 
 export type TranscriptionSessionEvent =
   | { readonly type: "open" }
+  | {
+      readonly type: "configuration";
+      readonly action: "connect";
+      readonly sampleRate: number;
+      readonly speechModel: string;
+      readonly formatTurns: boolean;
+      readonly promptLength: number;
+      readonly promptSha256?: string;
+      readonly promptPreview?: string;
+    }
   | TranscriptionSessionMessageEvent
   | { readonly type: "message_parse_error"; readonly error: string; readonly preview: string }
   | { readonly type: "error"; readonly error: string }

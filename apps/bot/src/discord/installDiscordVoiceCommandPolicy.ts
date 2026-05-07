@@ -2,6 +2,7 @@ import { installedVoid, type Installer } from "@loop-kit/common/Runtime";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, type ButtonInteraction } from "discord.js";
 import type { AppEnv } from "../app/AppRuntime";
 import type { MemoryKind, MemoryItem, MemoryMessage } from "../memory/MemoryService";
+import type { CharacterState } from "../personality/PersonalityService";
 import type { YoutubeGuildPlaybackState } from "../youtube/YoutubePlaybackService";
 
 const ephemeral = { flags: MessageFlags.Ephemeral } as const;
@@ -30,6 +31,15 @@ const renderMemoryItems = (rows: readonly MemoryItem[]): string =>
   rows.map((row) => `[${row.kind}] ${row.text}`).join("\n").slice(0, 1900) || "No results.";
 
 const renderMessages = (rows: readonly MemoryMessage[]): string => rows.map((row) => row.text).join("\n").slice(0, 1900) || "No results.";
+
+const renderCharacterState = (state: CharacterState): string =>
+  [
+    `Summary: ${state.summary}`,
+    `Mood: ${state.mood}`,
+    `Disposition: ${state.disposition}`,
+    `Grudges: ${state.grudges.length > 0 ? state.grudges.join("; ") : "none"}`,
+    `Attachments: ${state.attachments.length > 0 ? state.attachments.join("; ") : "none"}`,
+  ].join("\n").slice(0, 1900);
 
 const formatDuration = (seconds: number | undefined): string => {
   if (seconds == null || !Number.isFinite(seconds)) return "unknown";
@@ -215,6 +225,25 @@ export const installDiscordVoiceCommandPolicy: Installer<AppEnv> = (runtime) => 
               content: runtime.env.personality.listProfiles().map((profile) => `${profile.id}: ${profile.summary}`).join("\n"),
               ...ephemeral,
             });
+          }
+          if (subcommand === "state") {
+            const state = await runtime.env.personality.getCharacterState({ guildId: interaction.guildId });
+            await interaction.reply({ content: renderCharacterState(state), ...ephemeral });
+          }
+          if (subcommand === "set-state") {
+            const summary = interaction.options.getString("summary")?.trim();
+            const mood = interaction.options.getString("mood")?.trim();
+            const disposition = interaction.options.getString("disposition")?.trim();
+            if (!summary && !mood && !disposition) throw new Error("Set at least one character state field.");
+            const state = await runtime.env.personality.setCharacterState(
+              {
+                ...(summary ? { summary } : {}),
+                ...(mood ? { mood } : {}),
+                ...(disposition ? { disposition } : {}),
+              },
+              { guildId: interaction.guildId },
+            );
+            await interaction.reply({ content: renderCharacterState(state), ...ephemeral });
           }
           if (subcommand === "set") {
             const profileId = interaction.options.getString("profile", true);

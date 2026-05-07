@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Env } from "../Env";
 import type { StreamingTranscriptionSession, TranscriptionService, TranscriptionSessionMessageEvent } from "./TranscriptionService";
 
@@ -13,6 +14,20 @@ interface AssemblyAiMessage {
 }
 
 const previewText = (text: string): string => text.slice(0, 200);
+
+export const summarizeTranscriptionPrompt = (prompt: string): {
+  readonly promptLength: number;
+  readonly promptSha256?: string;
+  readonly promptPreview?: string;
+} => {
+  const trimmed = prompt.trim();
+  if (trimmed.length === 0) return { promptLength: 0 };
+  return {
+    promptLength: trimmed.length,
+    promptSha256: createHash("sha256").update(trimmed).digest("hex"),
+    promptPreview: previewText(trimmed),
+  };
+};
 
 const readMessageText = async (data: unknown): Promise<string> => {
   if (typeof data === "string") return data;
@@ -34,11 +49,21 @@ export const summarizeAssemblyAiMessage = (data: AssemblyAiMessage): Transcripti
 });
 
 export const createAssemblyAiTranscriptionService = (env: Env): TranscriptionService => ({
-  createStreamingSession: async ({ userId, sampleRate, onTurn, onSessionEvent }): Promise<StreamingTranscriptionSession> => {
+  createStreamingSession: async ({ userId, prompt, sampleRate, onTurn, onSessionEvent }): Promise<StreamingTranscriptionSession> => {
     const url = new URL("wss://streaming.assemblyai.com/v3/ws");
     url.searchParams.set("sample_rate", String(sampleRate));
     url.searchParams.set("speech_model", env.ASSEMBLYAI_SPEECH_MODEL);
     url.searchParams.set("format_turns", "true");
+    const promptSummary = summarizeTranscriptionPrompt(prompt);
+    if (promptSummary.promptLength > 0) url.searchParams.set("prompt", prompt.trim());
+    onSessionEvent?.({
+      type: "configuration",
+      action: "connect",
+      sampleRate,
+      speechModel: env.ASSEMBLYAI_SPEECH_MODEL,
+      formatTurns: true,
+      ...promptSummary,
+    });
 
     let closed = false;
     const socket = new WebSocket(url, {

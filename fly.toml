@@ -1,0 +1,31 @@
+app = "jettbot"
+primary_region = "ord"
+
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile"
+
+[processes]
+  app = "bun run start"
+
+[env]
+  NODE_ENV = "production"
+  YTDLP_PATH = "/usr/local/bin/yt-dlp"
+  FFMPEG_PATH = "/usr/bin/ffmpeg"
+  FFPROBE_PATH = "/usr/bin/ffprobe"
+  TMPDIR = "/tmp"
+
+[[restart]]
+  policy = "always"
+  retries = 10
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1
+  cpu_kind = "shared"
+  persist_rootfs = "never"
+  processes = ["app"]

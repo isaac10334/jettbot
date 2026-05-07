@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSignal } from "@loop-kit/common/Signal";
 import { installTranscriptionPipeline } from "../transcription/installTranscriptionPipeline";
-import { summarizeAssemblyAiMessage } from "../transcription/AssemblyAiTranscriptionService";
+import { summarizeAssemblyAiMessage, summarizeTranscriptionPrompt } from "../transcription/AssemblyAiTranscriptionService";
 import type { TranscriptionSessionEvent } from "../transcription/TranscriptionService";
 
 const pcm48StereoSilence = new Uint8Array(3840);
@@ -24,7 +24,7 @@ const emitAudio = (sidecarEvent: ReturnType<typeof createSignal<any>>, sequence:
   });
 };
 
-const createRuntime = () => {
+const createRuntime = (input?: { readonly prompt?: string }) => {
   const sidecarEvent = createSignal<any>();
   const conversationTurnReady = createSignal<any>();
   const sessionEvents: Array<(event: TranscriptionSessionEvent) => void> = [];
@@ -33,6 +33,7 @@ const createRuntime = () => {
   const acceptedTranscriptTurns: any[] = [];
   const sentAudio: number[] = [];
   const debugLines: Array<{ readonly path: string; readonly value: any }> = [];
+  const sessionPrompts: string[] = [];
   let sessionCreates = 0;
 
   const transcriptTurn = createSignal<any>();
@@ -41,7 +42,7 @@ const createRuntime = () => {
   const runtime = {
     env: {
       env: {
-        ASSEMBLYAI_TRANSCRIPTION_PROMPT: "",
+        ASSEMBLYAI_TRANSCRIPTION_PROMPT: input?.prompt ?? "",
         ASSEMBLYAI_SAMPLE_RATE: 16000,
       },
       audioNormalization: {
@@ -57,8 +58,9 @@ const createRuntime = () => {
         }),
       },
       transcription: {
-        createStreamingSession: async ({ onSessionEvent, onTurn }: { readonly onSessionEvent?: (event: TranscriptionSessionEvent) => void; readonly onTurn?: (turn: any) => void }) => {
+        createStreamingSession: async ({ prompt, onSessionEvent, onTurn }: { readonly prompt: string; readonly onSessionEvent?: (event: TranscriptionSessionEvent) => void; readonly onTurn?: (turn: any) => void }) => {
           sessionCreates += 1;
+          sessionPrompts.push(prompt);
           if (onSessionEvent) sessionEvents.push(onSessionEvent);
           if (onTurn) turnEvents.push(onTurn);
           await new Promise((resolve) => setTimeout(resolve, 10));
@@ -105,6 +107,7 @@ const createRuntime = () => {
     acceptedTranscriptTurns,
     sentAudio,
     debugLines,
+    sessionPrompts,
     get sessionCreates() {
       return sessionCreates;
     },
@@ -141,6 +144,24 @@ describe("installTranscriptionPipeline", () => {
         byteLength: 3200,
         durationMs: 100,
       },
+    });
+  });
+
+  test("logs the configured AssemblyAI prompt summary when a session starts", async () => {
+    const prompt = "Speaker names in channel: Isaac, Jett, Nathan.";
+    const runtime = createRuntime({ prompt });
+
+    for (let sequence = 1; sequence <= 5; sequence += 1) emitAudio(runtime.sidecarEvent, sequence);
+
+    await waitForChain();
+    expect(runtime.sessionPrompts).toEqual([prompt]);
+    expect(runtime.debugLines).toContainEqual({
+      path: "text/transcription-sessions.jsonl",
+      value: expect.objectContaining({
+        type: "assemblyai.session.starting",
+        userId: "user",
+        ...summarizeTranscriptionPrompt(prompt),
+      }),
     });
   });
 
